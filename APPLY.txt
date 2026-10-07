@@ -1,0 +1,36 @@
+DealLens — new Lens tool (single file)
+
+What this is
+A deal-price cross-checker. Load the master catalogue (upload or paste the sheet),
+set the sale discount %, then drop in the Amazon and Flipkart deal files. Every SKU
+is matched by ASIN / FSN (falling back to SKU) and flagged for:
+  - Off plan: deal price on a platform != catalogue New Price minus the discount %
+  - Deal missing: SKU is listed on the platform but isn't in that platform's deal file
+  - Amazon != Flipkart: the two deal prices differ (parity gap)
+  - Base price differs: the file's BAU / selling price != catalogue New Price
+  - Live != set: after "Live check", the storefront price != the configured deal price
+  - SKU differs / in file but not in catalogue (info only)
+Untick a row to keep that SKU out of the sale. Type into "Planned deal" to override
+one SKU; pick a family chip to set a family-level discount %.
+Everything is saved in this browser (localStorage). Settings > Export plan gives a
+JSON backup you can import on another machine.
+Live check uses Scrapingdog: add the key in Settings. It only scrapes the rows
+currently shown, 3 at a time. Amazon uses the same /amazon/product endpoint as
+ListLens. Flipkart uses the general /scrape endpoint and reads the price from the
+page's structured data; that parser hasn't been tested against a live page yet.
+
+Deploy (new repo, GitHub Pages)
+1. Create an empty repo SharpFarrier/DealLens on github.com (no README).
+2. Unzip, then from the DealLens folder:
+
+   git init
+   git add index.html
+   git commit -m "DealLens v1: GIF 2026 deal price cross-check"
+   git branch -M main
+   git remote add origin https://github.com/SharpFarrier/DealLens.git
+   git push -u origin main
+
+3. Repo > Settings > Pages > Source: Deploy from a branch > main / (root) > Save.
+   Live at https://sharpfarrier.github.io/DealLens/ in a minute or two.
+
+No migrations. No build step.

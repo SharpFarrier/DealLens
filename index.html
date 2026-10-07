@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DealLens</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{
+  --bg:#f6f7f9; --card:#ffffff; --ink:#14161a; --ink2:#5a6170; --ink3:#9aa1ad;
+  --line:#e3e6eb; --line2:#cfd4dc;
+  --accent:#1f3fae; --accent-bg:#e8edfb;
+  --ok:#17723f; --ok-bg:#e4f4ea;
+  --bad:#b4232c; --bad-bg:#fbe7e8;
+  --warn:#b4530c; --warn-bg:#fdf0e3;
+  --info:#5b4bb7; --info-bg:#eeecfb;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+  --sans:'Inter',system-ui,-apple-system,Segoe UI,sans-serif;
+  --head:'Space Grotesk','Inter',system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px}
+button,input,select{font:inherit;color:inherit}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 20px 60px}
+.top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.brand{font-family:var(--head);font-size:24px;font-weight:600;letter-spacing:-0.02em}
+.brand small{font-family:var(--sans);font-size:13px;font-weight:400;color:var(--ink2);margin-left:8px;letter-spacing:0}
+.top .sp{flex:1}
+.fld{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink2)}
+.fld input{height:32px;border:1px solid var(--line2);border-radius:7px;padding:0 9px;background:#fff;color:var(--ink)}
+.fld input.n{width:64px;font-family:var(--mono)}
+.btn{height:34px;padding:0 12px;border:1px solid var(--line2);background:#fff;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{border-color:var(--ink3)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn:disabled{opacity:.55;cursor:default}
+.sources{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.src{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;position:relative}
+.src.drag{border-color:var(--accent);background:var(--accent-bg)}
+.src h3{margin:0 0 2px;font-family:var(--head);font-size:15px;font-weight:600}
+.src .meta{font-size:12px;color:var(--ink2);min-height:18px}
+.src .meta.ok{color:var(--ok)}
+.src .row{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
+.src details{margin-top:8px;font-size:12px}
+.src summary{cursor:pointer;color:var(--ink2)}
+.map{display:grid;grid-template-columns:auto 1fr;gap:5px 8px;align-items:center;margin-top:6px}
+.map select{height:28px;border:1px solid var(--line2);border-radius:6px;background:#fff;font-size:12px;max-width:100%}
+.paste{width:100%;height:70px;margin-top:8px;border:1px solid var(--line2);border-radius:7px;font-family:var(--mono);font-size:11px;padding:6px;display:none}
+.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left}
+.kpi:hover{border-color:var(--line2)}
+.kpi.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.kpi .l{font-size:12px;color:var(--ink2)}
+.kpi .v{font-family:var(--head);font-size:24px;font-weight:600;margin-top:2px}
+.kpi.bad .v{color:var(--bad)} .kpi.warn .v{color:var(--warn)} .kpi.ok .v{color:var(--ok)} .kpi.info .v{color:var(--info)}
+.bar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.chip{height:28px;padding:0 11px;border-radius:14px;border:1px solid var(--line2);background:#fff;cursor:pointer;font-size:12.5px}
+.chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.bar .search{margin-left:auto;height:30px;width:220px;border:1px solid var(--line2);border-radius:7px;padding:0 10px;background:#fff}
+.famset{display:none;align-items:center;gap:6px;font-size:12.5px;color:var(--ink2);margin-bottom:10px}
+.famset input{width:60px;height:28px;border:1px solid var(--line2);border-radius:6px;padding:0 6px;font-family:var(--mono)}
+.tablewrap{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:980px}
+th{position:sticky;top:0;background:#fafbfc;font-weight:500;font-size:12px;color:var(--ink2);text-align:right;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;vertical-align:middle;font-size:13px}
+tr:last-child td{border-bottom:0}
+th.l,td.l{text-align:left}
+tr.ex td{color:var(--ink3)}
+.p{font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+.p.x{color:var(--bad);font-weight:500}
+.p.d{color:var(--ink3)}
+.sub{display:block;font-family:var(--mono);font-size:11px;color:var(--ink3);margin-top:2px}
+.desc{font-weight:500}
+.pin{width:92px;height:28px;border:1px solid transparent;border-radius:6px;text-align:right;font-family:var(--mono);font-size:12.5px;background:transparent;padding:0 6px}
+.pin:hover{border-color:var(--line2)}
+.pin:focus{border-color:var(--accent);outline:0;background:#fff}
+.pin.ov{background:var(--accent-bg);color:var(--accent)}
+.b{display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:6px;margin:1px 0 1px 4px;white-space:nowrap}
+.b.ok{background:var(--ok-bg);color:var(--ok)} .b.bad{background:var(--bad-bg);color:var(--bad)}
+.b.warn{background:var(--warn-bg);color:var(--warn)} .b.info{background:var(--info-bg);color:var(--info)}
+.b.mut{background:#eef0f3;color:var(--ink2)}
+.empty{padding:48px 20px;text-align:center;color:var(--ink2)}
+.empty h2{font-family:var(--head);font-weight:600;color:var(--ink);font-size:18px;margin:0 0 6px}
+.foot{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:12px;color:var(--ink2);gap:10px;flex-wrap:wrap}
+.settings{display:none;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:14px;gap:16px;flex-wrap:wrap;align-items:center}
+.settings.open{display:flex}
+.settings input{height:32px;border:1px solid var(--line2);border-radius:7px;padding:0 9px}
+.prog{height:3px;background:var(--line);border-radius:2px;overflow:hidden;width:160px;display:none}
+.prog i{display:block;height:100%;background:var(--accent);width:0}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:9px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.on{opacity:1}
+input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
+@media (max-width:900px){.sources{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.bar .search{margin-left:0;width:100%}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">DealLens<small id="evLabel"></small></div>
+    <div class="sp"></div>
+    <label class="fld">Sale <input id="evName" style="width:130px"></label>
+    <label class="fld">Discount % <input id="disc" class="n" type="number" min="0" max="90" step="0.5"></label>
+    <button class="btn" id="btnSettings">Settings</button>
+  </div>
+
+  <div class="settings" id="settings">
+    <label class="fld">Scrapingdog API key <input id="sdKey" type="password" style="width:240px" autocomplete="off"></label>
+    <label class="fld">Match tolerance ₹ <input id="tol" class="n" type="number" min="0" step="1"></label>
+    <button class="btn" id="btnExportPlan">Export plan</button>
+    <label class="btn">Import plan<input id="fPlan" type="file" accept=".json" hidden></label>
+    <button class="btn" id="btnReset">Clear all data</button>
+  </div>
+
+  <div class="sources">
+    <div class="src" data-slot="cat">
+      <h3>Catalogue</h3>
+      <div class="meta" id="mCat">Master sheet with Amazon ASIN, Flipkart FSN and New Price</div>
+      <div class="row">
+        <label class="btn">Upload file<input id="fCat" type="file" accept=".xlsx,.xls,.csv,.tsv" hidden></label>
+        <button class="btn" id="btnPaste">Paste from sheet</button>
+      </div>
+      <textarea class="paste" id="pasteCat" placeholder="Copy the whole sheet including the header row, paste here"></textarea>
+    </div>
+    <div class="src" data-slot="amz">
+      <h3>Amazon deal file</h3>
+      <div class="meta" id="mAmz">ASIN, SKU, BAU price, deal price</div>
+      <div class="row"><label class="btn">Upload file<input id="fAmz" type="file" accept=".xlsx,.xls,.csv,.tsv" hidden></label></div>
+      <details id="dAmz" hidden><summary>Columns</summary><div class="map" id="mapAmz"></div></details>
+    </div>
+    <div class="src" data-slot="fk">
+      <h3>Flipkart deal file</h3>
+      <div class="meta" id="mFk">FSN, SKU, selling price, deal price</div>
+      <div class="row"><label class="btn">Upload file<input id="fFk" type="file" accept=".xlsx,.xls,.csv,.tsv" hidden></label></div>
+      <details id="dFk" hidden><summary>Columns</summary><div class="map" id="mapFk"></div></details>
+    </div>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="bar" id="bar"></div>
+  <div class="famset" id="famset">Discount % for <b id="famName"></b> <input id="famDisc" type="number" min="0" max="90" step="0.5"> <button class="btn" id="famClear" style="height:28px">Use sale default</button></div>
+
+  <div class="tablewrap" id="tw"></div>
+
+  <div class="foot">
+    <span id="liveInfo">Live prices fill in once the sale is live. Live check scrapes only the rows currently shown.</span>
+    <span style="display:flex;gap:8px;align-items:center">
+      <span class="prog" id="prog"><i></i></span>
+      <button class="btn" id="btnLive">Live check</button>
+      <button class="btn" id="btnCsv">Export issues CSV</button>
+    </span>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// LOGIC START
+const RX_ASIN = /^B0[A-Z0-9]{8}$/i;
+const RX_FSN = /^[A-Z0-9]{16}$/i;
+
+function num(v){
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return isFinite(v) ? v : null;
+  const s = String(v).replace(/[^\d.\-]/g, '');
+  if (!s || s === '-' || s === '.') return null;
+  const n = parseFloat(s);
+  return isFinite(n) ? n : null;
+}
+function clean(v){ return String(v === null || v === undefined ? '' : v).trim(); }
+function findCol(headers, patterns, skip){
+  for (const p of patterns){
+    const i = headers.findIndex((h, idx) => !(skip || []).includes(idx) && p.test(clean(h)));
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+function findHeaderRow(aoa, test){
+  for (let r = 0; r < Math.min(aoa.length, 15); r++){
+    if ((aoa[r] || []).some(c => test.test(clean(c)))) return r;
+  }
+  return -1;
+}
+
+function parseCatalogue(aoa){
+  const hr = findHeaderRow(aoa, /amazon\s*asin/i);
+  if (hr < 0) throw new Error('No "Amazon Asin" column found in the catalogue.');
+  const h = aoa[hr].map(clean);
+  const c = {
+    family: findCol(h, [/^product\s*name/i]),
+    desc: findCol(h, [/product\s*desc/i]),
+    master: findCol(h, [/master\s*sku/i]),
+    amzSku: findCol(h, [/^amazon\s*sku/i]),
+    asin: findCol(h, [/amazon\s*asin/i]),
+    fkSku: findCol(h, [/^flipkart\s*sku/i]),
+    fkLink: findCol(h, [/flipkart\s*link/i]),
+    fsn: findCol(h, [/fsn/i]),
+    newPrice: findCol(h, [/new\s*price/i]),
+  };
+  if (c.newPrice < 0) throw new Error('No "New Price" column found in the catalogue.');
+  const items = [];
+  const seen = {};
+  for (let r = hr + 1; r < aoa.length; r++){
+    const row = aoa[r] || [];
+    const g = k => c[k] >= 0 ? clean(row[c[k]]) : '';
+    const desc = g('desc') || g('family');
+    const newPrice = num(row[c.newPrice]);
+    if (!desc || newPrice === null) continue;
+    const asin = g('asin').toUpperCase();
+    const fsn = g('fsn').toUpperCase();
+    const item = {
+      family: g('family') || desc.split('-')[0].trim(),
+      desc, master: g('master'),
+      amzSku: g('amzSku'), asin: RX_ASIN.test(asin) ? asin : '',
+      fkSku: g('fkSku'), fkLink: /^https?:/i.test(g('fkLink')) ? g('fkLink') : '',
+      fsn: RX_FSN.test(fsn) ? fsn : '',
+      newPrice,
+    };
+    let key = (item.asin || item.fsn || item.master || desc);
+    if (seen[key]) key = key + '#' + (++seen[key]); else seen[key] = 1;
+    item.key = key;
+    items.push(item);
+  }
+  return items;
+}
+
+function guessDealMapping(headers, platform){
+  const h = headers.map(clean);
+  const id = findCol(h, platform === 'amz' ? [/asin/i] : [/fsn/i]);
+  const sku = findCol(h, [/sku/i], [id]);
+  const base = findCol(h, [/bau/i, /selling\s*price/i, /list\s*price/i, /^price$/i, /mrp/i], [id, sku]);
+  const deal = findCol(h, [/after/i, /deal/i, /discount/i, /sale\s*price/i, /event/i], [id, sku, base]);
+  return { id, sku, base, deal };
+}
+
+function parseDealFile(aoa, platform, mapping){
+  const hr = findHeaderRow(aoa, platform === 'amz' ? /asin/i : /fsn/i);
+  if (hr < 0) throw new Error(platform === 'amz' ? 'No ASIN column found in this file.' : 'No FSN column found in this file.');
+  const headers = aoa[hr].map(clean);
+  const m = mapping || guessDealMapping(headers, platform);
+  const rows = [];
+  for (let r = hr + 1; r < aoa.length; r++){
+    const row = aoa[r] || [];
+    const id = m.id >= 0 ? clean(row[m.id]).toUpperCase() : '';
+    const sku = m.sku >= 0 ? clean(row[m.sku]) : '';
+    if (!id && !sku) continue;
+    rows.push({
+      id, sku,
+      base: m.base >= 0 ? num(row[m.base]) : null,
+      deal: m.deal >= 0 ? num(row[m.deal]) : null,
+    });
+  }
+  return { headers, mapping: m, rows };
+}
+
+function plannedFor(item, plan){
+  if (plan.override && plan.override[item.key] !== undefined) return plan.override[item.key];
+  const d = (plan.familyDisc && plan.familyDisc[item.family] !== undefined) ? plan.familyDisc[item.family] : plan.disc;
+  return Math.round(item.newPrice * (1 - d / 100));
+}
+
+function buildResults(items, plan, amz, fk, live, tol){
+  tol = tol === undefined ? 1 : tol;
+  live = live || { amz: {}, fk: {} };
+  const idx = (file) => {
+    const byId = new Map(), bySku = new Map(), used = new Set();
+    if (file) file.rows.forEach((r, i) => {
+      if (r.id && !byId.has(r.id)) byId.set(r.id, i);
+      if (r.sku && !bySku.has(r.sku.toUpperCase())) bySku.set(r.sku.toUpperCase(), i);
+    });
+    return { byId, bySku, used };
+  };
+  const A = idx(amz), F = idx(fk);
+  const look = (file, ix, id, sku) => {
+    if (!file) return null;
+    let i = id ? ix.byId.get(id) : undefined;
+    if (i === undefined && sku) i = ix.bySku.get(sku.toUpperCase());
+    if (i === undefined) return null;
+    ix.used.add(i);
+    return file.rows[i];
+  };
+  const out = [];
+  for (const it of items){
+    const excluded = !!(plan.excluded && plan.excluded[it.key]);
+    const planned = plannedFor(it, plan);
+    const a = it.asin ? look(amz, A, it.asin, it.amzSku) : null;
+    const f = it.fsn ? look(fk, F, it.fsn, it.fkSku) : null;
+    const la = it.asin ? live.amz[it.asin] : null;
+    const lf = it.fsn ? live.fk[it.fsn] : null;
+    const flags = [];
+    const side = (name, code, file, rec, listed, catSku) => {
+      if (!file || !listed) return;
+      if (!rec){ if (!excluded) flags.push({ t:'bad', k:code+'-missing', l:name+' deal missing' }); return; }
+      if (rec.deal === null){ if (!excluded) flags.push({ t:'bad', k:code+'-missing', l:name+' deal price blank' }); }
+      else if (!excluded && Math.abs(rec.deal - planned) > tol){
+        const diff = Math.round(rec.deal - planned);
+        flags.push({ t:'bad', k:code+'-off', l:name+' off plan '+(diff > 0 ? '+' : '−')+'₹'+Math.abs(diff).toLocaleString('en-IN') });
+      }
+      else if (excluded && rec.base !== null && rec.deal < rec.base - tol){
+        flags.push({ t:'warn', k:code+'-unplanned', l:name+' has a deal, SKU excluded' });
+      }
+      if (rec.base !== null && Math.abs(rec.base - it.newPrice) > tol){
+        flags.push({ t:'warn', k:'base', l:name+' base ₹'+Math.round(rec.base).toLocaleString('en-IN')+' ≠ catalogue' });
+      }
+      if (catSku && rec.sku && rec.sku.toUpperCase() !== catSku.toUpperCase()){
+        flags.push({ t:'info', k:'sku', l:name+' SKU differs' });
+      }
+    };
+    side('Amazon', 'amz', amz, a, !!it.asin, it.amzSku);
+    side('Flipkart', 'fk', fk, f, !!it.fsn, it.fkSku);
+    if (a && f && a.deal !== null && f.deal !== null && Math.abs(a.deal - f.deal) > tol){
+      flags.push({ t:'warn', k:'parity', l:'Parity gap ₹'+Math.round(Math.abs(a.deal - f.deal)).toLocaleString('en-IN') });
+    }
+    const liveCheck = (name, code, lv, rec) => {
+      if (!lv || lv.price === null || lv.price === undefined) return;
+      const target = rec && rec.deal !== null ? rec.deal : planned;
+      if (Math.abs(lv.price - target) > tol){
+        flags.push({ t:'bad', k:'live', l:name+' live ₹'+Math.round(lv.price).toLocaleString('en-IN')+' ≠ set' });
+      }
+    };
+    liveCheck('Amazon', 'amz', la, a);
+    liveCheck('Flipkart', 'fk', lf, f);
+    out.push({ item: it, excluded, planned, a, f, la, lf, flags });
+  }
+  const extras = [];
+  const addExtras = (file, ix, name) => {
+    if (!file) return;
+    file.rows.forEach((r, i) => {
+      if (ix.used.has(i)) return;
+      extras.push({ item: { key: name+':'+(r.id || r.sku), family: '—', desc: r.sku || r.id, amzSku: name === 'Amazon' ? r.sku : '', fkSku: name === 'Flipkart' ? r.sku : '', asin: name === 'Amazon' ? r.id : '', fsn: name === 'Flipkart' ? r.id : '', newPrice: null },
+        excluded: false, planned: null, a: name === 'Amazon' ? r : null, f: name === 'Flipkart' ? r : null, la: null, lf: null,
+        flags: [{ t:'info', k:'extra', l:'In '+name+' file, not in catalogue' }] });
+    });
+  };
+  addExtras(amz, A, 'Amazon');
+  addExtras(fk, F, 'Flipkart');
+  return out.concat(extras);
+}
+
+function summarize(results){
+  const s = { total: 0, matched: 0, off: 0, missing: 0, parity: 0, base: 0, live: 0, other: 0 };
+  for (const r of results){
+    s.total++;
+    const ks = r.flags.map(f => f.k);
+    if (!r.flags.length){ if (!r.excluded) s.matched++; continue; }
+    if (ks.some(k => /-off$/.test(k))) s.off++;
+    if (ks.some(k => /-missing$/.test(k))) s.missing++;
+    if (ks.includes('parity')) s.parity++;
+    if (ks.includes('base')) s.base++;
+    if (ks.includes('live')) s.live++;
+    if (ks.some(k => k === 'extra' || k === 'sku' || /-unplanned$/.test(k))) s.other++;
+  }
+  return s;
+}
+
+function extractFkPrice(html){
+  const blocks = html.match(/<script[^>]*application\/ld\+json[^>]*>[\s\S]*?<\/script>/gi) || [];
+  for (const b of blocks){
+    try {
+      const json = JSON.parse(b.replace(/^<script[^>]*>/i, '').replace(/<\/script>$/i, ''));
+      const list = Array.isArray(json) ? json : [json];
+      for (const j of list){
+        const offers = j && j.offers;
+        const o = Array.isArray(offers) ? offers[0] : offers;
+        const p = o && num(o.price);
+        if (p) return p;
+      }
+    } catch (e) {}
+  }
+  const pats = [/"finalPrice"\s*:\s*\{[^{}]*?"value"\s*:\s*(\d+(?:\.\d+)?)/, /"sellingPrice"\s*:\s*\{[^{}]*?"value"\s*:\s*(\d+(?:\.\d+)?)/];
+  for (const p of pats){ const m = html.match(p); if (m) return parseFloat(m[1]); }
+  return null;
+}
+function amzLivePrice(d){
+  if (!d) return null;
+  return num(d.price) || num(d.selling_price) || num(d.final_price) || num(d.deal_price) || null;
+}
+// LOGIC END
+
+/* ---------------- UI ---------------- */
+const LS = 'deallens:';
+const store = {
+  get(k, d){ try { const v = localStorage.getItem(LS + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v){ try { localStorage.setItem(LS + k, JSON.stringify(v)); } catch (e) { toast('Could not save to this browser'); } },
+  del(k){ try { localStorage.removeItem(LS + k); } catch (e) {} },
+};
+const S = {
+  items: store.get('items', []),
+  plan: store.get('plan', { event: 'GIF 2026', disc: 16, familyDisc: {}, override: {}, excluded: {} }),
+  amz: store.get('amz', null),
+  fk: store.get('fk', null),
+  amzAoa: store.get('amzAoa', null),
+  fkAoa: store.get('fkAoa', null),
+  live: store.get('live', { amz: {}, fk: {}, at: null }),
+  cfg: store.get('cfg', { sdKey: '', tol: 1 }),
+  view: { family: 'All', filter: 'all', q: '' },
+};
+const $ = id => document.getElementById(id);
+const inr = v => v === null || v === undefined ? '—' : '₹' + (Math.round(v * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const esc = s => String(s === null || s === undefined ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+function toast(m){ const t = $('toast'); t.textContent = m; t.classList.add('on'); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('on'), 2600); }
+function savePlan(){ store.set('plan', S.plan); }
+
+async function readFile(file){
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  let best = null;
+  for (const n of wb.SheetNames){
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' });
+    if (!best || aoa.length > best.length) best = aoa;
+  }
+  return best || [];
+}
+
+function loadCatalogue(aoa){
+  try {
+    S.items = parseCatalogue(aoa);
+    store.set('items', S.items);
+    toast(S.items.length + ' catalogue rows loaded');
+    render();
+  } catch (e) { toast(e.message); }
+}
+function loadDeal(platform, aoa, mapping){
+  try {
+    const parsed = parseDealFile(aoa, platform, mapping);
+    S[platform] = parsed; S[platform + 'Aoa'] = aoa;
+    store.set(platform, parsed); store.set(platform + 'Aoa', aoa);
+    render();
+  } catch (e) { toast(e.message); }
+}
+
+function renderSources(){
+  $('mCat').textContent = S.items.length ? S.items.length + ' SKUs · ' + S.items.filter(i => i.asin).length + ' on Amazon · ' + S.items.filter(i => i.fsn).length + ' on Flipkart' : 'Master sheet with Amazon ASIN, Flipkart FSN and New Price';
+  $('mCat').className = 'meta' + (S.items.length ? ' ok' : '');
+  for (const [p, m, d, map] of [['amz', 'mAmz', 'dAmz', 'mapAmz'], ['fk', 'mFk', 'dFk', 'mapFk']]){
+    const f = S[p];
+    $(m).textContent = f ? f.rows.length + ' rows loaded' : (p === 'amz' ? 'ASIN, SKU, BAU price, deal price' : 'FSN, SKU, selling price, deal price');
+    $(m).className = 'meta' + (f ? ' ok' : '');
+    $(d).hidden = !f;
+    if (f){
+      const opts = sel => '<option value="-1">—</option>' + f.headers.map((h, i) => '<option value="' + i + '"' + (i === sel ? ' selected' : '') + '>' + esc(h || ('Column ' + (i + 1))) + '</option>').join('');
+      const lab = { id: p === 'amz' ? 'ASIN' : 'FSN', sku: 'SKU', base: 'Base price', deal: 'Deal price' };
+      $(map).innerHTML = Object.keys(lab).map(k => '<span>' + lab[k] + '</span><select data-p="' + p + '" data-k="' + k + '">' + opts(f.mapping[k]) + '</select>').join('');
+    }
+  }
+}
+
+function currentResults(){ return buildResults(S.items, S.plan, S.amz, S.fk, S.live, S.cfg.tol); }
+
+const FILTERS = [
+  ['all', 'All SKUs', '', r => true],
+  ['matched', 'All matched', 'ok', r => !r.flags.length && !r.excluded],
+  ['off', 'Off plan', 'bad', r => r.flags.some(f => /-off$/.test(f.k))],
+  ['missing', 'Deal missing', 'bad', r => r.flags.some(f => /-missing$/.test(f.k))],
+  ['parity', 'Amazon ≠ Flipkart', 'warn', r => r.flags.some(f => f.k === 'parity')],
+  ['live', 'Live ≠ set', 'bad', r => r.flags.some(f => f.k === 'live')],
+  ['base', 'Base price differs', 'warn', r => r.flags.some(f => f.k === 'base')],
+  ['issues', 'Any issue', 'info', r => r.flags.length > 0],
+];
+
+function render(){
+  $('evName').value = S.plan.event || '';
+  $('evLabel').textContent = S.plan.event ? S.plan.event : '';
+  $('disc').value = S.plan.disc;
+  $('sdKey').value = S.cfg.sdKey || '';
+  $('tol').value = S.cfg.tol;
+  renderSources();
+  const results = currentResults();
+  const s = summarize(results);
+  const counts = { all: s.total, matched: s.matched, off: s.off, missing: s.missing, parity: s.parity, live: s.live };
+  $('kpis').innerHTML = FILTERS.slice(0, 6).map(([k, l, cls]) =>
+    '<button class="kpi ' + cls + (S.view.filter === k ? ' on' : '') + '" data-f="' + k + '"><div class="l">' + l + '</div><div class="v">' + (counts[k] || 0) + '</div></button>').join('');
+
+  const fams = ['All'].concat([...new Set(S.items.map(i => i.family))]);
+  const extraFilters = FILTERS.slice(6).map(([k, l]) => '<button class="chip' + (S.view.filter === k ? ' on' : '') + '" data-f="' + k + '">' + l + '</button>').join('');
+  $('bar').innerHTML = fams.map(f => '<button class="chip' + (S.view.family === f ? ' on' : '') + '" data-fam="' + esc(f) + '">' + esc(f) + '</button>').join('') +
+    '<span style="width:10px"></span>' + extraFilters +
+    '<input class="search" id="q" placeholder="Search name, SKU, ASIN, FSN" value="' + esc(S.view.q) + '">';
+  const fam = S.view.family;
+  $('famset').style.display = fam !== 'All' ? 'flex' : 'none';
+  if (fam !== 'All'){
+    $('famName').textContent = fam;
+    const fd = S.plan.familyDisc[fam];
+    $('famDisc').value = fd !== undefined ? fd : '';
+    $('famDisc').placeholder = S.plan.disc;
+  }
+  renderTable(results);
+}
+
+function visibleRows(results){
+  const f = FILTERS.find(x => x[0] === S.view.filter) || FILTERS[0];
+  const q = S.view.q.trim().toLowerCase();
+  return results.filter(r => {
+    if (S.view.family !== 'All' && r.item.family !== S.view.family) return false;
+    if (!f[3](r)) return false;
+    if (q){
+      const it = r.item;
+      const hay = [it.desc, it.family, it.amzSku, it.fkSku, it.asin, it.fsn, it.master].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function priceCell(rec, planned, listed, excluded){
+  if (!listed) return '<span class="p d">not listed</span>';
+  if (!rec) return '<span class="p x">no deal</span>';
+  if (rec.deal === null) return '<span class="p x">blank</span>';
+  const off = planned !== null && !excluded && Math.abs(rec.deal - planned) > S.cfg.tol;
+  return '<span class="p' + (off ? ' x' : '') + '">' + inr(rec.deal) + '</span>' + (rec.base !== null ? '<span class="sub">base ' + inr(rec.base) + '</span>' : '');
+}
+function liveCell(lv){
+  if (!lv) return '—';
+  if (lv.err) return '<span title="' + esc(lv.err) + '">err</span>';
+  return lv.price === null ? '?' : inr(lv.price);
+}
+
+function renderTable(results){
+  if (!S.items.length && !S.amz && !S.fk){
+    $('tw').innerHTML = '<div class="empty"><h2>Load your catalogue to start</h2>Upload or paste the master sheet. Then add the Amazon and Flipkart deal files to see what doesn’t match.</div>';
+    return;
+  }
+  const rows = visibleRows(results);
+  if (!rows.length){ $('tw').innerHTML = '<div class="empty">No SKUs match this view.</div>'; return; }
+  const body = rows.map(r => {
+    const it = r.item, isExtra = it.newPrice === null;
+    const status = r.flags.length ? r.flags.map(f => '<span class="b ' + f.t + '">' + esc(f.l) + '</span>').join('') :
+      (r.excluded ? '<span class="b mut">Not in sale</span>' : (S.amz || S.fk ? '<span class="b ok">Matched</span>' : '<span class="b mut">No deal files yet</span>'));
+    const ov = S.plan.override[it.key] !== undefined;
+    return '<tr class="' + (r.excluded ? 'ex' : '') + '">' +
+      '<td class="l">' + (isExtra ? '' : '<input type="checkbox" data-ex="' + esc(it.key) + '"' + (r.excluded ? '' : ' checked') + ' title="Include in sale">') + '</td>' +
+      '<td class="l"><span class="desc">' + esc(it.desc) + '</span><span class="sub">' + esc([it.asin, it.fsn].filter(Boolean).join(' · ') || (it.amzSku || it.fkSku)) + '</span></td>' +
+      '<td><span class="p d">' + inr(it.newPrice) + '</span></td>' +
+      '<td>' + (isExtra ? '—' : '<input class="pin' + (ov ? ' ov' : '') + '" data-pl="' + esc(it.key) + '" value="' + r.planned + '" title="' + (ov ? 'Manual price. Clear to use the discount %.' : 'From discount %') + '">') + '</td>' +
+      '<td>' + priceCell(r.a, r.planned, isExtra ? !!r.a : !!it.asin, r.excluded) + '</td>' +
+      '<td>' + priceCell(r.f, r.planned, isExtra ? !!r.f : !!it.fsn, r.excluded) + '</td>' +
+      '<td><span class="p">' + liveCell(r.la) + ' / ' + liveCell(r.lf) + '</span></td>' +
+      '<td>' + status + '</td></tr>';
+  }).join('');
+  $('tw').innerHTML = '<table><thead><tr><th class="l" style="width:34px"></th><th class="l">Product</th><th>Catalogue</th><th>Planned deal</th><th>Amazon set</th><th>Flipkart set</th><th>Live A / F</th><th>Status</th></tr></thead><tbody>' + body + '</tbody></table>';
+  $('btnLive').textContent = 'Live check (' + rows.length + ')';
+}
+
+/* ---------- live ---------- */
+async function pool(tasks, n, onDone){
+  let i = 0;
+  const run = async () => { while (i < tasks.length){ const t = tasks[i++]; await t(); onDone(); } };
+  await Promise.all(Array.from({ length: Math.min(n, tasks.length) }, run));
+}
+async function liveCheck(){
+  const key = S.cfg.sdKey;
+  if (!key){ $('settings').classList.add('open'); toast('Add your Scrapingdog API key first'); return; }
+  const rows = visibleRows(currentResults()).filter(r => !r.excluded && r.item.newPrice !== null);
+  const tasks = [];
+  for (const r of rows){
+    const it = r.item;
+    if (it.asin) tasks.push(async () => {
+      try {
+        const res = await fetch('https://api.scrapingdog.com/amazon/product?api_key=' + encodeURIComponent(key) + '&asin=' + it.asin + '&domain=in');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        S.live.amz[it.asin] = { price: amzLivePrice(await res.json()), at: Date.now() };
+      } catch (e) { S.live.amz[it.asin] = { price: null, err: e.message, at: Date.now() }; }
+    });
+    if (it.fsn) tasks.push(async () => {
+      try {
+        const url = it.fkLink || ('https://www.flipkart.com/product/p/itm?pid=' + it.fsn);
+        const res = await fetch('https://api.scrapingdog.com/scrape?api_key=' + encodeURIComponent(key) + '&url=' + encodeURIComponent(url) + '&dynamic=false');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        S.live.fk[it.fsn] = { price: extractFkPrice(await res.text()), at: Date.now() };
+      } catch (e) { S.live.fk[it.fsn] = { price: null, err: e.message, at: Date.now() }; }
+    });
+  }
+  if (!tasks.length){ toast('Nothing to check in this view'); return; }
+  if (tasks.length > 60 && !confirm('This will make ' + tasks.length + ' Scrapingdog requests. Continue?')) return;
+  const btn = $('btnLive'), prog = $('prog'), bar = prog.querySelector('i');
+  btn.disabled = true; prog.style.display = 'block';
+  let done = 0;
+  await pool(tasks, 3, () => { done++; bar.style.width = (done / tasks.length * 100) + '%'; btn.textContent = 'Checking ' + done + '/' + tasks.length; });
+  S.live.at = Date.now();
+  store.set('live', S.live);
+  btn.disabled = false; prog.style.display = 'none';
+  $('liveInfo').textContent = 'Live prices checked ' + new Date(S.live.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) + '.';
+  render();
+}
+
+/* ---------- export ---------- */
+function csvCell(v){ const s = String(v === null || v === undefined ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+function download(name, text, type){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function exportCsv(){
+  const rows = currentResults().filter(r => r.flags.length);
+  if (!rows.length){ toast('No issues to export'); return; }
+  const head = ['Family', 'Product', 'ASIN', 'FSN', 'Catalogue price', 'Planned deal', 'Amazon set', 'Flipkart set', 'Amazon live', 'Flipkart live', 'Issues'];
+  const lines = [head.join(',')].concat(rows.map(r => [r.item.family, r.item.desc, r.item.asin, r.item.fsn, r.item.newPrice, r.planned,
+    r.a ? r.a.deal : '', r.f ? r.f.deal : '', r.la ? r.la.price : '', r.lf ? r.lf.price : '', r.flags.map(f => f.l).join('; ')].map(csvCell).join(',')));
+  download('DealLens-issues-' + new Date().toISOString().slice(0, 10) + '.csv', '\ufeff' + lines.join('\n'), 'text/csv');
+}
+
+/* ---------- events ---------- */
+document.addEventListener('click', e => {
+  const k = e.target.closest('[data-f]');
+  if (k){ S.view.filter = S.view.filter === k.dataset.f && k.dataset.f !== 'all' ? 'all' : k.dataset.f; render(); return; }
+  const fm = e.target.closest('[data-fam]');
+  if (fm){ S.view.family = fm.dataset.fam; render(); return; }
+});
+document.addEventListener('input', e => {
+  if (e.target.id === 'q'){
+    S.view.q = e.target.value;
+    const pos = e.target.selectionStart;
+    renderTable(currentResults());
+    const q = $('q'); q.focus(); q.setSelectionRange(pos, pos);
+  }
+});
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.ex !== undefined){
+    if (t.checked) delete S.plan.excluded[t.dataset.ex]; else S.plan.excluded[t.dataset.ex] = true;
+    savePlan(); render();
+  } else if (t.dataset.pl !== undefined){
+    const key = t.dataset.pl, v = num(t.value);
+    const it = S.items.find(i => i.key === key);
+    const auto = it ? plannedFor(it, Object.assign({}, S.plan, { override: {} })) : null;
+    if (v === null || v === auto) delete S.plan.override[key]; else S.plan.override[key] = v;
+    savePlan(); render();
+  } else if (t.dataset.p && t.dataset.k){
+    const p = t.dataset.p, m = Object.assign({}, S[p].mapping, { [t.dataset.k]: parseInt(t.value, 10) });
+    loadDeal(p, S[p + 'Aoa'], m);
+  }
+});
+$('evName').addEventListener('change', e => { S.plan.event = e.target.value.trim(); savePlan(); render(); });
+$('disc').addEventListener('change', e => { const v = num(e.target.value); if (v !== null && v >= 0 && v < 90){ S.plan.disc = v; savePlan(); } render(); });
+$('famDisc').addEventListener('change', e => {
+  const v = num(e.target.value), f = S.view.family;
+  if (v === null) delete S.plan.familyDisc[f]; else if (v >= 0 && v < 90) S.plan.familyDisc[f] = v;
+  savePlan(); render();
+});
+$('famClear').addEventListener('click', () => { delete S.plan.familyDisc[S.view.family]; savePlan(); render(); });
+$('btnSettings').addEventListener('click', () => $('settings').classList.toggle('open'));
+$('sdKey').addEventListener('change', e => { S.cfg.sdKey = e.target.value.trim(); store.set('cfg', S.cfg); toast('Key saved in this browser'); });
+$('tol').addEventListener('change', e => { const v = num(e.target.value); S.cfg.tol = v === null || v < 0 ? 1 : v; store.set('cfg', S.cfg); render(); });
+$('btnPaste').addEventListener('click', () => { const p = $('pasteCat'); p.style.display = p.style.display === 'block' ? 'none' : 'block'; if (p.style.display === 'block') p.focus(); });
+$('pasteCat').addEventListener('paste', e => {
+  setTimeout(() => {
+    const text = $('pasteCat').value;
+    const aoa = text.split(/\r?\n/).map(l => l.split('\t'));
+    loadCatalogue(aoa);
+    $('pasteCat').value = ''; $('pasteCat').style.display = 'none';
+  }, 0);
+});
+const onFile = (input, fn) => $(input).addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try { fn(await readFile(f)); } catch (err) { toast('Could not read ' + f.name); }
+  e.target.value = '';
+});
+onFile('fCat', loadCatalogue);
+onFile('fAmz', aoa => { loadDeal('amz', aoa); toast('Amazon file loaded'); });
+onFile('fFk', aoa => { loadDeal('fk', aoa); toast('Flipkart file loaded'); });
+document.querySelectorAll('.src').forEach(el => {
+  el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag'); });
+  el.addEventListener('dragleave', () => el.classList.remove('drag'));
+  el.addEventListener('drop', async e => {
+    e.preventDefault(); el.classList.remove('drag');
+    const f = e.dataTransfer.files[0]; if (!f) return;
+    const aoa = await readFile(f);
+    const slot = el.dataset.slot;
+    if (slot === 'cat') loadCatalogue(aoa); else { loadDeal(slot, aoa); toast((slot === 'amz' ? 'Amazon' : 'Flipkart') + ' file loaded'); }
+  });
+});
+$('btnLive').addEventListener('click', liveCheck);
+$('btnCsv').addEventListener('click', exportCsv);
+$('btnExportPlan').addEventListener('click', () => download('DealLens-plan.json', JSON.stringify({ plan: S.plan, items: S.items }, null, 2), 'application/json'));
+$('fPlan').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const d = JSON.parse(await f.text());
+    if (d.plan){ S.plan = Object.assign({ familyDisc: {}, override: {}, excluded: {} }, d.plan); savePlan(); }
+    if (Array.isArray(d.items)){ S.items = d.items; store.set('items', S.items); }
+    toast('Plan imported'); render();
+  } catch (err) { toast('That file isn’t a DealLens plan'); }
+  e.target.value = '';
+});
+$('btnReset').addEventListener('click', () => {
+  if (!confirm('Clear the catalogue, plan, deal files and live results from this browser?')) return;
+  ['items', 'plan', 'amz', 'fk', 'amzAoa', 'fkAoa', 'live'].forEach(k => store.del(k));
+  location.reload();
+});
+if (S.live.at) $('liveInfo').textContent = 'Live prices last checked ' + new Date(S.live.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '.';
+render();
+</script>
+</body>
+</html>
