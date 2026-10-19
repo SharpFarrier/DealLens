@@ -1,27 +1,38 @@
-DealLens 4.0.1 — fix "Sheet sync failed: error:1E08010C:DECODER routines::unsupported"
+DealLens 4.1 — Flipkart Live status (includes the 4.0.2 HTTP 429 fix; you can skip pushing 4.0.2)
 
-WHAT WAS WRONG
-That error means Node couldn't read GOOGLE_PRIVATE_KEY. I reproduced it: the key only worked if it was
-pasted in exactly one of two forms. Surrounding quotes, a trailing comma, doubled \\n, spaces instead of
-line breaks, Windows line endings, or pasting the whole JSON file all gave this same error.
+FIRST: run supabase/migrations/002_deallens_flipkart_status.sql in the DispatchLens Supabase project
+(SQL Editor > New query > paste > Run). It only adds two deallens_ tables for Flipkart results.
 
-WHAT CHANGED
-- lib/google.ts: the key is cleaned up and rebuilt before use, so all of those paste forms now work
-  (14 forms tested). If the key is truly broken, the sync error now says so in plain words.
-- Optional: you can paste the whole downloaded JSON key file into ONE variable, GOOGLE_SERVICE_ACCOUNT_JSON,
-  instead of GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY. You don't need to change anything if you
-  keep the two you already added.
-- tests/key.test.mts (new), tests/google.test.mts, package.json (test script, version), .env.example.
+WHAT'S NEW
+- Live status has an Amazon / Flipkart / Both switch.
+  Flipkart: each FSN's own product page is checked (the link from the master sheet). It reports
+  Live & buyable, Other variant shown (Flipkart showed a different FSN), Sold out / Discontinued,
+  Coming soon / Not buyable, or Couldn't check. Price is compared with the Flipkart deal file (or
+  your plan, or the catalogue price — the same "Compare price to" setting as Amazon).
+  How it reads the page was worked out from 3 real Flipkart pages fetched today: the page states the
+  FSN it is showing, the price and InStock/OutOfStock in one structured block.
+  Both: one row per product, Amazon and Flipkart side by side. Filters pick a product if either side
+  matches, and still show both sides.
+- The Deal prices tab's Flipkart "Live check" now uses the same reading, and also fills Live status.
+- The 9:00 am daily check (if switched on) now covers Flipkart too: half the time for Amazon, half
+  for Flipkart, longest-unchecked first; anything not reached goes first the next day.
+- 4.0.2 fix included: at most 2 Scrapingdog requests at a time (SCRAPINGDOG_CONCURRENCY to change),
+  and HTTP 429 is retried with waits instead of shown as "Couldn't check".
 
-PUSH (no comment lines, safe to paste into Terminal)
+WHAT WAS CHECKED
+- tsc clean, next build clean, all tests pass (logic on your real files, Google key 14 paste forms,
+  429 retry, Flipkart classifier incl. a swapped variant, sold out, pre-order, blocked page).
+- Migration 002 ran twice on Postgres next to 001: approved device reads, pending device gets
+  nothing, the browser can't write results, change pings work.
+- Built app driven in a browser against stand-in data: Flipkart view, Both view, filters, 390px width.
+- Not tested here: real Flipkart checks through the deployed server (they will use your Vercel key).
+
+PUSH (safe to paste into Terminal)
 cd ~/DealLens
 git pull
-rm -rf /tmp/deallens-401 && unzip -q ~/Downloads/DealLens_v4.0.1.zip -d /tmp/deallens-401
-rsync -a /tmp/deallens-401/deallens-v4.0.1/ ~/DealLens/
+rm -rf /tmp/deallens-41 && unzip -q ~/Downloads/DealLens_v4.1.zip -d /tmp/deallens-41
+rsync -a /tmp/deallens-41/deallens-v4.1/ ~/DealLens/
 git status --short
 git add -A
-git commit -m "DealLens 4.0.1: accept the Google key however it is pasted"
+git commit -m "DealLens 4.1: Flipkart Live status, Scrapingdog rate-limit fix"
 git push
-
-Vercel deploys the push automatically. When it shows Ready, press Sync now in DealLens.
-No database changes.

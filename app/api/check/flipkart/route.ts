@@ -8,7 +8,7 @@ export const maxDuration = 60;
 
 const MAX_PER_CALL = 12;
 
-// Flipkart live price check. Product page links come from the synced catalogue, never from the request.
+// Flipkart Live status + live price check. Product page links come from the synced catalogue, never from the request.
 export async function POST(req: Request) {
   const m = await requireAccess(req);
   if (m instanceof NextResponse) return m;
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const links = new Map((data || []).map(r => [r.fsn as string, (r.flipkart_link as string) || '']));
   try {
-    const results = await checkFlipkart(wanted.filter(f => links.has(f)).map(fsn => ({ fsn, url: links.get(fsn)! })), Date.now() + 45_000);
+    const results = await checkFlipkart(wanted.filter(f => links.has(f)).map(fsn => ({ fsn, url: links.get(fsn)! })), m.email, Date.now() + 45_000);
     return NextResponse.json({ results });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });

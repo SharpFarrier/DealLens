@@ -122,3 +122,7 @@ input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:po
 .inp{height:34px;border:1px solid var(--line2);border-radius:8px;padding:0 10px;background:#fff}
 .who-by{font-size:11px;color:var(--ink3)}
 @media (max-width:900px){.srcs2{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:#fff}
+.seg button{height:32px;padding:0 14px;border:0;background:transparent;cursor:pointer;color:var(--ink2);font-size:13px}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--ink);color:#fff}

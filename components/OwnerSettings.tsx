@@ -56,7 +56,7 @@ export default function OwnerSettings({ me, data, onToast, reload }: {
           Daily at 8:00 am, and when someone opens DealLens over an hour after the last sync</label>
         <span className="k">Auto Live status check</span>
         <label className="switch"><input type="checkbox" checked={data.config.auto_live_status} onChange={e => setConfig('auto_live_status', e.target.checked)} />
-          Daily at 9:00 am, every Amazon ASIN (about {data.items.filter(i => i.asin).length} Scrapingdog credits a day)</label>
+          Daily at 9:00 am, Amazon ASINs and Flipkart FSNs (up to about {new Set(data.items.map(i => i.asin).filter(Boolean)).size + new Set(data.items.map(i => i.fsn).filter(Boolean)).size} Scrapingdog requests a day; anything not reached goes first next day)</label>
         <span className="k">People and devices</span><span>Managed in DispatchLens &gt; Users (approve the person, then their “DealLens · …” device)</span>
         <span className="k">Old single-page plan</span>
         <span className="row">

@@ -13,6 +13,7 @@ export interface PlanSettingsRow {
 export interface DealFileRow { platform: 'amz' | 'fk'; filename: string | null; aoa: Aoa; mapping: DealMapping; uploaded_by: string | null; uploaded_at: string }
 export interface LivePriceRow { platform: 'amz' | 'fk'; id: string; price: number | string | null; err: string | null; checked_at: string }
 export interface AvailRow { asin: string; cls: AvailClass; served: string | null; price: number | string | null; seller: string | null; mid: string | null; err: string | null; checked_by: string | null; checked_at: string }
+export interface FkAvailRow { fsn: string; cls: AvailClass; served: string | null; price: number | string | null; avail: string | null; err: string | null; checked_by: string | null; checked_at: string }
 export interface SyncRunRow { id: number; trigger: string; triggered_by: string | null; started_at: string; finished_at: string | null; status: 'running' | 'ok' | 'error'; row_count: number | null; added: number | null; removed: number | null; changed: number | null; error: string | null }
 export interface MemberRow { email: string; role: 'admin' | 'member'; added_by: string | null; created_at: string; last_seen: string | null }
 

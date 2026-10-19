@@ -359,3 +359,49 @@ export function diffCatalogue(prev: Item[], next: Item[]): { added: number; remo
   for (const k of p.keys()) if (!n.has(k)) removed++;
   return { added, removed, changed };
 }
+
+// ----- Flipkart Live status (exact-FSN buyability) -----
+// Flipkart product pages carry a JSON-LD Product block: sku = the FSN the page is showing,
+// offers.price, offers.availability (schema.org InStock / OutOfStock / PreOrder ...).
+// Checked against real pages on 19 Oct 2026 (Nova 4x6 in stock, Eva out of stock, Atlas 3x6 in stock).
+export interface FkAvailRecord extends AvailRecord { avail: string | null }
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function fkProducts(html: string): any[] {
+  const out: any[] = [];
+  const blocks = html.match(/<script[^>]*application\/ld\+json[^>]*>[\s\S]*?<\/script>/gi) || [];
+  for (const b of blocks) {
+    try {
+      const j = JSON.parse(b.replace(/^<script[^>]*>/i, '').replace(/<\/script>$/i, ''));
+      const list = Array.isArray(j) ? j : j && Array.isArray(j['@graph']) ? j['@graph'] : [j];
+      for (const x of list) if (x && x['@type'] === 'Product') out.push(x);
+    } catch { /* skip */ }
+  }
+  return out;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export function classifyFk(fsn: string, html: string | null | undefined): FkAvailRecord {
+  const want = String(fsn || '').trim().toUpperCase();
+  const base = { served: null, price: null, seller: null, mid: null, avail: null };
+  if (!html || typeof html !== 'string') return { cls: 'error', err: 'Empty response', ...base };
+  const products = fkProducts(html);
+  const p = products.find(x => String(x.sku || '').toUpperCase() === want) || products[0] || null;
+  let served = p && RX_FSN.test(String(p.sku || '')) ? String(p.sku).toUpperCase() : null;
+  if (!served) {
+    const m = html.match(/"productId"\s*:\s*"([A-Z0-9]{16})"/);
+    served = m ? m[1] : null;
+  }
+  if (!p && !served) return { cls: 'error', err: "Page didn't look like a Flipkart product page", ...base };
+  const offer = p ? (Array.isArray(p.offers) ? p.offers[0] : p.offers) : null;
+  let price = offer ? num(offer.price) : null;
+  if (price !== null && price <= 0) price = null;
+  const avail = offer && offer.availability ? String(offer.availability).replace(/^https?:\/\/schema\.org\//i, '') : null;
+  const rec = { served, price, seller: null, mid: null, avail, err: null };
+  if (served && served !== want) return { cls: 'variant', ...rec };
+  const a = (avail || '').toLowerCase();
+  if (/outofstock|soldout|discontinued/.test(a)) return { cls: 'unavailable', ...rec };
+  if (!offer || price === null || /preorder|presale|backorder|limitedavailability/.test(a)) return { cls: 'nobuy', ...rec };
+  if (a && !/instock|onlineonly/.test(a)) return { cls: 'nobuy', ...rec };
+  return { cls: 'live', ...rec };
+}

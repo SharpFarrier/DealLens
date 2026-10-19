@@ -3,12 +3,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabaseBrowser } from '@/lib/supabase/browser';
 import { parseDealFile, type DealFile, type Item, type LiveMap, type Plan, type AvailRecord } from '@/lib/logic';
 import {
-  productToItem, toNum, type AvailRow, type DealFileRow, type LivePriceRow, type PlanSettingsRow, type ProductRow, type SyncRunRow,
+  productToItem, toNum, type AvailRow, type FkAvailRow, type DealFileRow, type LivePriceRow, type PlanSettingsRow, type ProductRow, type SyncRunRow,
 } from '@/lib/data';
 
 export interface Settings { event: string; disc: number; tol: number; priceRef: 'deal' | 'catalogue' | 'off'; merchantId: string; updatedBy: string | null; updatedAt: string | null }
 export interface DealFileState { row: DealFileRow; parsed: DealFile | null; error: string | null }
-export interface AvailState extends AvailRecord { asin: string; checkedAt: string; checkedBy: string | null }
+// For Flipkart rows, `asin` holds the FSN and `avail` the stock state Flipkart reported.
+export interface AvailState extends AvailRecord { asin: string; checkedAt: string; checkedBy: string | null; avail?: string | null }
 export interface Config { auto_sync: boolean; auto_live_status: boolean }
 
 export interface DealData {
@@ -20,6 +21,7 @@ export interface DealData {
   files: { amz: DealFileState | null; fk: DealFileState | null };
   live: LiveMap;
   avail: Record<string, AvailState>;
+  fkAvail: Record<string, AvailState>;
   lastSync: SyncRunRow | null;
   lastOkSync: SyncRunRow | null;
   config: Config;
@@ -30,12 +32,12 @@ const EMPTY: DealData = {
   settings: { event: '', disc: 16, tol: 1, priceRef: 'deal', merchantId: '', updatedBy: null, updatedAt: null },
   plan: { disc: 16, familyDisc: {}, override: {}, excluded: {} },
   files: { amz: null, fk: null },
-  live: { amz: {}, fk: {} }, avail: {}, lastSync: null, lastOkSync: null,
+  live: { amz: {}, fk: {} }, avail: {}, fkAvail: {}, lastSync: null, lastOkSync: null,
   config: { auto_sync: true, auto_live_status: false },
 };
 
-type Table = 'products' | 'plan_settings' | 'family_discounts' | 'sku_overrides' | 'sku_excluded' | 'deal_files' | 'live_prices' | 'avail_checks' | 'sync_runs' | 'app_config';
-const TABLES: Table[] = ['products', 'plan_settings', 'family_discounts', 'sku_overrides', 'sku_excluded', 'deal_files', 'live_prices', 'avail_checks', 'sync_runs', 'app_config'];
+type Table = 'products' | 'plan_settings' | 'family_discounts' | 'sku_overrides' | 'sku_excluded' | 'deal_files' | 'live_prices' | 'avail_checks' | 'fk_avail_checks' | 'sync_runs' | 'app_config';
+const TABLES: Table[] = ['products', 'plan_settings', 'family_discounts', 'sku_overrides', 'sku_excluded', 'deal_files', 'live_prices', 'avail_checks', 'fk_avail_checks', 'sync_runs', 'app_config'];
 
 function fileState(row: DealFileRow): DealFileState {
   try {
@@ -109,6 +111,16 @@ export function useDealData() {
             avail[r.asin] = { asin: r.asin, cls: r.cls, served: r.served, price: toNum(r.price), seller: r.seller, mid: r.mid, err: r.err, checkedAt: r.checked_at, checkedBy: r.checked_by };
           });
           patch.avail = avail;
+          return;
+        }
+        case 'fk_avail_checks': {
+          const { data: rows, error } = await sb.from('deallens_fk_avail_checks').select('*');
+          if (error) { errors.push(error.message); return; }
+          const fkAvail: Record<string, AvailState> = {};
+          (rows as FkAvailRow[]).forEach(r => {
+            fkAvail[r.fsn] = { asin: r.fsn, cls: r.cls, served: r.served, price: toNum(r.price), seller: null, mid: null, err: r.err, avail: r.avail, checkedAt: r.checked_at, checkedBy: r.checked_by };
+          });
+          patch.fkAvail = fkAvail;
           return;
         }
         case 'sync_runs': {

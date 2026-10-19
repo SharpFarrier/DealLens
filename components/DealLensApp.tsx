@@ -44,9 +44,11 @@ const AF: [AvailFilter, string, string][] = [
   ['nobuy', 'No price / no Buy', 'warn'], ['error', "Couldn't check", ''],
 ];
 const AF_CHIPS: [AvailFilter, string][] = [['price', 'Price ≠ expected'], ['seller', 'Other seller has Buy Box'], ['unchecked', 'Not checked yet'], ['issues', 'Any issue']];
-interface AvailRowView { item: Item; rec: AvailState | null; expected: number | null; flags: AvailFlag[] }
+type LvPlat = 'amz' | 'fk' | 'both';
+interface AvailRowView { platform: Platform; id: string; item: Item; rec: AvailState | null; expected: number | null; flags: AvailFlag[] }
 
-const BATCH = 12;
+// Small batches, one at a time: the server spreads each batch over SCRAPINGDOG_CONCURRENCY requests.
+const BATCH = 6;
 
 export default function DealLensApp({ me }: { me: Member }) {
   const { data, patchLocal, reload } = useDealData();
@@ -55,6 +57,11 @@ export default function DealLensApp({ me }: { me: Member }) {
   const [family, setFamily] = useState('All');
   const [filter, setFilter] = useState<DealFilter>('all');
   const [afilter, setAfilter] = useState<AvailFilter>('all');
+  const [lvPlat, setLvPlatState] = useState<LvPlat>('amz');
+  useEffect(() => {
+    try { const v = localStorage.getItem('deallens:lvplat'); if (v === 'amz' || v === 'fk' || v === 'both') setLvPlatState(v); } catch { /* storage blocked */ }
+  }, []);
+  const setLvPlat = (v: LvPlat) => { setLvPlatState(v); try { localStorage.setItem('deallens:lvplat', v); } catch { /* storage blocked */ } };
   const [q, setQ] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [busy, setBusy] = useState<{ label: string; done: number; total: number } | null>(null);
@@ -74,7 +81,7 @@ export default function DealLensApp({ me }: { me: Member }) {
   }, []);
   useEffect(() => { if (data.error) toast(data.error); }, [data.error, toast]);
 
-  const { items, settings, plan, files, live, avail } = data;
+  const { items, settings, plan, files, live, avail, fkAvail } = data;
   const amz = files.amz?.parsed ?? null;
   const fk = files.fk?.parsed ?? null;
 
@@ -187,15 +194,29 @@ export default function DealLensApp({ me }: { me: Member }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [results, family, filter, ql]);
 
-  // ---------- live status rows ----------
-  const availRows: AvailRowView[] = useMemo(() => {
+  // ---------- live status rows (Amazon by ASIN, Flipkart by FSN) ----------
+  const amzRows: AvailRowView[] = useMemo(() => {
     const seen = new Set<string>();
     return items.filter(it => it.asin && !seen.has(it.asin) && (seen.add(it.asin), true)).map(it => {
       const rec = avail[it.asin] || null;
       const expected = expectedPrice(it, settings.priceRef, amz, plan);
-      return { item: it, rec, expected, flags: availFlags(rec, expected, settings.tol, settings.merchantId) };
+      return { platform: 'amz' as Platform, id: it.asin, item: it, rec, expected, flags: availFlags(rec, expected, settings.tol, settings.merchantId) };
     });
   }, [items, avail, settings.priceRef, settings.tol, settings.merchantId, amz, plan]);
+  const fkRows: AvailRowView[] = useMemo(() => {
+    const seen = new Set<string>();
+    return items.filter(it => it.fsn && !seen.has(it.fsn) && (seen.add(it.fsn), true)).map(it => {
+      const rec = fkAvail[it.fsn] || null;
+      let expected: number | null = null;
+      if (settings.priceRef === 'catalogue') expected = it.newPrice;
+      else if (settings.priceRef === 'deal') {
+        const d = fk?.rows.find(r => r.id === it.fsn);
+        expected = d && d.deal !== null ? d.deal : plannedFor(it, plan);
+      }
+      return { platform: 'fk' as Platform, id: it.fsn, item: it, rec, expected, flags: availFlags(rec, expected, settings.tol, null) };
+    });
+  }, [items, fkAvail, settings.priceRef, settings.tol, fk, plan]);
+  const availRows = lvPlat === 'amz' ? amzRows : lvPlat === 'fk' ? fkRows : [...amzRows, ...fkRows];
   const availMatch = (r: AvailRowView, f: AvailFilter) => {
     if (f === 'all') return true;
     if (f === 'unchecked') return !r.rec;
@@ -203,12 +224,16 @@ export default function DealLensApp({ me }: { me: Member }) {
     if (f === 'issues') return !!r.rec && (r.rec.cls !== 'live' || r.flags.length > 0);
     return !!r.rec && r.rec.cls === f;
   };
-  const visibleAvail = useMemo(
-    () => availRows.filter(r => (family === 'All' || r.item.family === family) && availMatch(r, afilter) && matchQ(r.item, r.rec?.served || '')),
+  const visibleAvail = useMemo(() => {
+    const hit = availRows.filter(r => (family === 'All' || r.item.family === family) && availMatch(r, afilter) && matchQ(r.item, r.rec?.served || ''));
+    if (lvPlat !== 'both') return hit;
+    // Both: a product shows (with both of its platforms) when either platform matches the filter.
+    const keys = new Set(hit.map(r => r.item.key));
+    return availRows.filter(r => keys.has(r.item.key));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [availRows, family, afilter, ql],
-  );
-  const productFor = (asin: string | null) => (asin ? items.find(i => i.asin === asin)?.desc || null : null);
+  }, [availRows, family, afilter, ql, lvPlat]);
+  const productFor = (id: string | null, platform: Platform) =>
+    id ? items.find(i => (platform === 'amz' ? i.asin : i.fsn) === id)?.desc || null : null;
 
   // ---------- checks (server-side Scrapingdog, batched) ----------
   async function runBatches(label: string, ids: string[], endpoint: string, key: 'asins' | 'fsns') {
@@ -229,17 +254,20 @@ export default function DealLensApp({ me }: { me: Member }) {
         setBusy({ label, done, total: ids.length });
       }
     };
-    await Promise.all([worker(), worker()]);
+    await worker();
     setBusy(null);
     if (failed) toast(`${failed} of ${ids.length} couldn't be checked. Try again.`);
   }
   async function checkAvail(onlyFailed: boolean) {
     const rows = onlyFailed ? availRows.filter(r => r.rec?.cls === 'error') : visibleAvail;
-    const asins = rows.map(r => r.item.asin);
-    if (!asins.length) { toast('Nothing to check in this view'); return; }
-    if (asins.length > 60 && !confirm(`This uses ${asins.length} Scrapingdog credits. Continue?`)) return;
-    await runBatches('Checking', asins, '/api/check/amazon', 'asins');
-    reload('avail_checks'); reload('live_prices');
+    const asins = [...new Set(rows.filter(r => r.platform === 'amz').map(r => r.id))];
+    const fsns = [...new Set(rows.filter(r => r.platform === 'fk').map(r => r.id))];
+    const total = asins.length + fsns.length;
+    if (!total) { toast('Nothing to check in this view'); return; }
+    if (total > 60 && !confirm(`This uses about ${total} Scrapingdog credits. Continue?`)) return;
+    if (asins.length) await runBatches('Amazon', asins, '/api/check/amazon', 'asins');
+    if (fsns.length) await runBatches('Flipkart', fsns, '/api/check/flipkart', 'fsns');
+    reload('avail_checks'); reload('fk_avail_checks'); reload('live_prices');
   }
   async function liveDealCheck() {
     const rows = visibleDeal.filter(r => !r.excluded && r.item.newPrice !== null);
@@ -250,7 +278,7 @@ export default function DealLensApp({ me }: { me: Member }) {
     if (total > 60 && !confirm(`This uses ${total} Scrapingdog credits. Continue?`)) return;
     if (asins.length) await runBatches('Amazon', asins, '/api/check/amazon', 'asins');
     if (fsns.length) await runBatches('Flipkart', fsns, '/api/check/flipkart', 'fsns');
-    reload('live_prices'); reload('avail_checks');
+    reload('live_prices'); reload('avail_checks'); reload('fk_avail_checks');
   }
 
   // ---------- exports ----------
@@ -266,12 +294,12 @@ export default function DealLensApp({ me }: { me: Member }) {
   function exportAvailCsv() {
     const rows = availRows.filter(r => r.rec && (r.rec.cls !== 'live' || r.flags.length));
     if (!rows.length) { toast('No issues to export'); return; }
-    const lab: Record<string, string> = { live: 'Live & buyable', variant: 'Other variant shown', unavailable: 'Unavailable', nobuy: 'No price / no Buy', error: "Couldn't check" };
-    const head = ['Family', 'Product', 'SKU', 'ASIN asked', 'ASIN Amazon showed', 'Product shown', 'Price shown', 'Expected price', 'Buy Box seller', 'Status', 'Flags', 'Checked at', 'Checked by'];
+    const head = ['Platform', 'Family', 'Product', 'SKU', 'ID asked (ASIN/FSN)', 'ID shown', 'Product shown', 'Price shown', 'Expected price', 'Stock / Buy Box seller', 'Status', 'Flags', 'Checked at', 'Checked by'];
     download(`DealLens-live-status-${new Date().toISOString().slice(0, 10)}.csv`, [head.join(',')].concat(rows.map(r => {
       const rec = r.rec!;
-      return [r.item.family, r.item.desc, r.item.amzSku, r.item.asin, rec.served || '', productFor(rec.served) || '', rec.price ?? '', r.expected ?? '',
-        rec.seller || rec.mid || '', lab[rec.cls] + (rec.err ? ': ' + rec.err : ''),
+      const fk = r.platform === 'fk';
+      return [fk ? 'Flipkart' : 'Amazon', r.item.family, r.item.desc, fk ? r.item.fkSku : r.item.amzSku, r.id, rec.served || '', productFor(rec.served, r.platform) || '',
+        rec.price ?? '', r.expected ?? '', fk ? rec.avail || '' : rec.seller || rec.mid || '', statusText(rec, r.platform),
         r.flags.map(f => (f === 'price' ? 'Price differs' : 'Other seller has Buy Box')).join('; '), when(rec.checkedAt), rec.checkedBy || ''].map(csvCell).join(',');
     })).join('\n'));
   }
@@ -285,7 +313,9 @@ export default function DealLensApp({ me }: { me: Member }) {
   const availCounts: Record<string, number> = { live: 0, variant: 0, unavailable: 0, nobuy: 0, error: 0 };
   availRows.forEach(r => { if (r.rec) availCounts[r.rec.cls]++; });
   const failedCount = availCounts.error;
-  const lastAvail = Object.values(avail).reduce<string | null>((m, r) => (!m || r.checkedAt > m ? r.checkedAt : m), null);
+  const lastAvail = [...(lvPlat !== 'fk' ? Object.values(avail) : []), ...(lvPlat !== 'amz' ? Object.values(fkAvail) : [])]
+    .reduce<string | null>((m, r) => (!m || r.checkedAt > m ? r.checkedAt : m), null);
+  const unitWord = lvPlat === 'amz' ? 'ASIN' : lvPlat === 'fk' ? 'FSN' : 'listing';
 
   return (
     <div className="wrap">
@@ -392,6 +422,14 @@ export default function DealLensApp({ me }: { me: Member }) {
         </>
       ) : (
         <>
+          <div className="row" style={{ marginBottom: 12 }}>
+            <span className="seg" role="tablist" aria-label="Platform">
+              {([['amz', `Amazon · ${amzRows.length}`], ['fk', `Flipkart · ${fkRows.length}`], ['both', 'Both']] as [LvPlat, string][]).map(([k, l]) => (
+                <button key={k} role="tab" aria-selected={lvPlat === k} className={lvPlat === k ? 'on' : ''} onClick={() => setLvPlat(k)}>{l}</button>
+              ))}
+            </span>
+            {lvPlat === 'both' && <span className="who-by">Counts add up both platforms.</span>}
+          </div>
           <div className="kpis k5">
             {AF.map(([k, l, cls]) => (
               <button key={k} className={`kpi ${cls}${afilter === k ? ' on' : ''}`} onClick={() => setAfilter(afilter === k ? 'all' : k)}>
@@ -399,12 +437,14 @@ export default function DealLensApp({ me }: { me: Member }) {
               </button>
             ))}
           </div>
-          <Bar families={['All', ...new Set(items.filter(i => i.asin).map(i => i.family))]} family={family} setFamily={setFamily} q={q} setQ={setQ}
-            chips={AF_CHIPS.map(([k, l]) => ({ k, l, on: afilter === k, click: () => setAfilter(afilter === k ? 'all' : k) }))}
-            placeholder="Search name, SKU, ASIN" />
-          <AvailTable rows={visibleAvail} productFor={productFor} priceRef={settings.priceRef} />
+          <Bar families={['All', ...new Set(availRows.map(r => r.item.family))]} family={family} setFamily={setFamily} q={q} setQ={setQ}
+            chips={AF_CHIPS.filter(([k]) => !(lvPlat === 'fk' && k === 'seller')).map(([k, l]) => ({ k, l, on: afilter === k, click: () => setAfilter(afilter === k ? 'all' : k) }))}
+            placeholder={lvPlat === 'fk' ? 'Search name, SKU, FSN' : lvPlat === 'amz' ? 'Search name, SKU, ASIN' : 'Search name, SKU, ASIN, FSN'} />
+          {lvPlat === 'both'
+            ? <BothTable rows={visibleAvail} productFor={productFor} priceRef={settings.priceRef} />
+            : <AvailTable rows={visibleAvail} platform={lvPlat} productFor={productFor} priceRef={settings.priceRef} />}
           <div className="foot">
-            <span>{busy ? `${busy.label} ${busy.done}/${busy.total}` : lastAvail ? `Last checked ${when(lastAvail)}. Checks only the rows shown.` : 'Opens each ASIN the way a shopper would and checks that Amazon shows that exact ASIN, with a price and a Buy button.'}</span>
+            <span>{busy ? `${busy.label} ${busy.done}/${busy.total}` : lastAvail ? `Last checked ${when(lastAvail)}. Checks only the rows shown.` : 'Opens each listing the way a shopper would and checks that the page shows that exact ASIN or FSN, in stock, with a price.'}</span>
             <span className="row">
               <label className="fld">Compare price to
                 <select className="ref" value={settings.priceRef} onChange={e => saveSettings({ price_ref: e.target.value })}>
@@ -416,7 +456,7 @@ export default function DealLensApp({ me }: { me: Member }) {
               {busy && <span className="prog" style={{ display: 'block' }}><i style={{ width: `${(busy.done / busy.total) * 100}%` }} /></span>}
               {failedCount > 0 && <button className="btn" disabled={!!busy} onClick={() => checkAvail(true)}>Retry failed ({failedCount})</button>}
               <button className="btn primary" disabled={!!busy || !visibleAvail.length} onClick={() => checkAvail(false)}>
-                Check {visibleAvail.length} ASIN{visibleAvail.length === 1 ? '' : 's'}
+                Check {visibleAvail.length} {unitWord}{visibleAvail.length === 1 ? '' : 's'}
               </button>
               <button className="btn" onClick={exportAvailCsv}>Export issues CSV</button>
             </span>
@@ -508,42 +548,107 @@ function DealTable({ rows, plan, tol, hasFiles, onExclude, onOverride }: {
   );
 }
 
-function AvailTable({ rows, productFor, priceRef }: { rows: AvailRowView[]; productFor: (a: string | null) => string | null; priceRef: string }) {
-  if (!rows.length) return <div className="tablewrap"><div className="empty">No ASINs match this view.</div></div>;
+function statusText(rec: AvailState, platform: Platform): string {
+  if (rec.cls === 'live') return 'Live & buyable';
+  if (rec.cls === 'variant') return 'Other variant shown';
+  if (rec.cls === 'unavailable') return platform === 'fk' ? (rec.avail && /discontinued/i.test(rec.avail) ? 'Discontinued' : 'Sold out') : 'Unavailable, no offer';
+  if (rec.cls === 'nobuy') {
+    if (platform === 'fk' && rec.avail && /preorder|presale/i.test(rec.avail)) return 'Coming soon / pre-order';
+    return rec.price === null ? 'Page live, no price' : platform === 'fk' ? 'Not buyable' : 'Page live, no Buy Box';
+  }
+  return "Couldn't check" + (rec.err ? `: ${rec.err}` : '');
+}
+
+function StatusCell({ r, productFor, priceRef, compact }: {
+  r: AvailRowView; productFor: (id: string | null, p: Platform) => string | null; priceRef: string; compact?: boolean;
+}) {
+  const rec = r.rec;
   const B = ({ t, children }: { t: string; children: React.ReactNode }) => <span className={'b ' + t}>{children}</span>;
+  let status: React.ReactNode;
+  if (!rec) status = <B t="mut">Not checked</B>;
+  else if (rec.cls === 'live') status = <B t="ok">Live &amp; buyable</B>;
+  else if (rec.cls === 'variant') { const p = productFor(rec.served, r.platform); status = <B t="bad">Other variant shown{p ? `: ${p}` : ''}</B>; }
+  else if (rec.cls === 'unavailable') status = <B t="bad">{statusText(rec, r.platform)}</B>;
+  else if (rec.cls === 'nobuy') status = <B t="warn">{statusText(rec, r.platform)}</B>;
+  else status = <span className="b mut" title={rec.err || ''}>{statusText(rec, r.platform)}</span>;
+  return (
+    <>
+      {status}
+      {r.flags.includes('price') && <B t="warn">Price ≠ {priceRef === 'catalogue' ? 'catalogue' : 'deal'} {inr(r.expected)}</B>}
+      {r.flags.includes('seller') && <B t="warn">Buy Box: {rec?.seller || rec?.mid}</B>}
+      {rec && !compact && <span className="sub">{when(rec.checkedAt)}{rec.checkedBy ? ` · ${rec.checkedBy === 'schedule' ? 'daily check' : short(rec.checkedBy)}` : ''}</span>}
+    </>
+  );
+}
+
+function AvailTable({ rows, platform, productFor, priceRef }: {
+  rows: AvailRowView[]; platform: Platform; productFor: (id: string | null, p: Platform) => string | null; priceRef: string;
+}) {
+  const site = platform === 'fk' ? 'Flipkart' : 'Amazon';
+  if (!rows.length) return <div className="tablewrap"><div className="empty">No {platform === 'fk' ? 'FSNs' : 'ASINs'} match this view.</div></div>;
   return (
     <div className="tablewrap">
       <table>
-        <thead><tr><th className="l">Product</th><th className="l">Asked for</th><th className="l">Amazon showed</th><th>Price shown</th><th className="l">Status</th></tr></thead>
+        <thead><tr><th className="l">Product</th><th className="l">Asked for</th><th className="l">{site} showed</th><th>Price shown</th><th className="l">Status</th></tr></thead>
         <tbody>
           {rows.map(r => {
             const it = r.item, rec = r.rec;
             const swapped = rec?.cls === 'variant';
-            let status: React.ReactNode;
-            if (!rec) status = <B t="mut">Not checked</B>;
-            else if (rec.cls === 'live') status = <B t="ok">Live &amp; buyable</B>;
-            else if (rec.cls === 'variant') { const p = productFor(rec.served); status = <B t="bad">Other variant shown{p ? `: ${p}` : ''}</B>; }
-            else if (rec.cls === 'unavailable') status = <B t="bad">Unavailable, no offer</B>;
-            else if (rec.cls === 'nobuy') status = <B t="warn">{rec.price === null ? 'Page live, no price' : 'Page live, no Buy Box'}</B>;
-            else status = <span className="b mut" title={rec.err || ''}>Couldn&apos;t check{rec.err ? `: ${rec.err}` : ''}</span>;
             return (
-              <tr key={it.asin}>
-                <td className="l"><span className="desc">{it.desc}</span><span className="sub">{it.amzSku}</span></td>
-                <td className="l"><span className="p">{it.asin}</span></td>
+              <tr key={r.platform + r.id}>
+                <td className="l"><span className="desc">{it.desc}</span><span className="sub">{platform === 'fk' ? it.fkSku : it.amzSku}</span></td>
+                <td className="l"><span className="p">{r.id}</span></td>
                 <td className="l"><span className={'p' + (swapped ? ' swap' : rec ? '' : ' d')}>{rec?.served || '—'}</span></td>
                 <td>
                   <span className={'p' + (swapped || !rec || rec.price === null ? ' d' : r.flags.includes('price') ? ' x' : '')}>{rec && rec.price !== null ? inr(rec.price) : '—'}</span>
                   {r.expected !== null && <span className="sub">exp {inr(r.expected)}</span>}
                 </td>
-                <td className="l">
-                  {status}
-                  {r.flags.includes('price') && <B t="warn">Price ≠ {priceRef === 'catalogue' ? 'catalogue' : 'deal'} {inr(r.expected)}</B>}
-                  {r.flags.includes('seller') && <B t="warn">Buy Box: {rec?.seller || rec?.mid}</B>}
-                  {rec && <span className="sub">{when(rec.checkedAt)}{rec.checkedBy ? ` · ${rec.checkedBy === 'schedule' ? 'daily check' : short(rec.checkedBy)}` : ''}</span>}
-                </td>
+                <td className="l"><StatusCell r={r} productFor={productFor} priceRef={priceRef} /></td>
               </tr>
             );
           })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// One row per product, Amazon and Flipkart side by side.
+function BothTable({ rows, productFor, priceRef }: {
+  rows: AvailRowView[]; productFor: (id: string | null, p: Platform) => string | null; priceRef: string;
+}) {
+  const byKey = new Map<string, { item: Item; amz?: AvailRowView; fk?: AvailRowView }>();
+  rows.forEach(r => {
+    const g = byKey.get(r.item.key) || { item: r.item };
+    if (r.platform === 'amz') g.amz = r; else g.fk = r;
+    byKey.set(r.item.key, g);
+  });
+  const groups = [...byKey.values()];
+  if (!groups.length) return <div className="tablewrap"><div className="empty">No listings match this view.</div></div>;
+  const cell = (r?: AvailRowView) => {
+    if (!r) return <span className="p d">—</span>;
+    const rec = r.rec;
+    return (
+      <>
+        <span className={'p' + (!rec || rec.price === null || rec.cls === 'variant' ? ' d' : r.flags.includes('price') ? ' x' : '')} style={{ marginRight: 6 }}>
+          {rec && rec.price !== null ? inr(rec.price) : '—'}
+        </span>
+        <StatusCell r={r} productFor={productFor} priceRef={priceRef} compact />
+      </>
+    );
+  };
+  return (
+    <div className="tablewrap">
+      <table>
+        <thead><tr><th className="l">Product</th><th className="l">Amazon</th><th className="l">Flipkart</th></tr></thead>
+        <tbody>
+          {groups.map(g => (
+            <tr key={g.item.key}>
+              <td className="l"><span className="desc">{g.item.desc}</span><span className="sub">{[g.item.asin, g.item.fsn].filter(Boolean).join(' · ')}</span></td>
+              <td className="l">{cell(g.amz)}</td>
+              <td className="l">{cell(g.fk)}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
