@@ -41,5 +41,5 @@ assert.equal(items[0].newPrice, 9499);
 await readCatalogueSheet();
 assert.equal(calls.filter(c => c.includes('oauth2')).length, 1, 'token is cached between reads');
 sheetStatus = 403;
-await assert.rejects(readCatalogueSheet(), /isn't shared with deallens-sync@test/);
+await assert.rejects(readCatalogueSheet(), /isn't shared with the service account \(deallens-sync@test/);
 console.log('google tests passed');

@@ -1,45 +1,27 @@
-DealLens v4 — its own app, sharing DispatchLens's database (no new Supabase project, no extra Supabase cost)
+DealLens 4.0.1 — fix "Sheet sync failed: error:1E08010C:DECODER routines::unsupported"
 
-WHAT CHANGED FROM v3
-- No separate Supabase project. DealLens runs on the DispatchLens project; its tables are all prefixed deallens_.
-  Nothing in DispatchLens is changed: no DispatchLens table, rule, page or code.
-- Same people as DispatchLens: anyone approved in DispatchLens > Users can sign in with Google. The DealLens Team
-  page is gone. A Google account that signs in to DealLens for the first time gets a pending request in
-  DispatchLens > Users, exactly as if they'd signed in to DispatchLens.
-- Device approval: DealLens uses DispatchLens's device list. A new device shows a code, and a request labelled
-  "DealLens · Mac Chrome" (etc.) appears in DispatchLens > Users. Until it's approved, that device gets nothing:
-  the database itself refuses DealLens data to it, not just the screen. The owner account skips the device check.
-- Owner-only settings (schedules, sync details, importing the old plan) moved into DealLens > Settings.
-- Everything else as v3: Deal prices + Live status, catalogue from the sheet (read-only), shared plan and deal files,
-  live updates, Scrapingdog key on the server.
+WHAT WAS WRONG
+That error means Node couldn't read GOOGLE_PRIVATE_KEY. I reproduced it: the key only worked if it was
+pasted in exactly one of two forms. Surrounding quotes, a trailing comma, doubled \\n, spaces instead of
+line breaks, Windows line endings, or pasting the whole JSON file all gave this same error.
 
-ORDER — do these in this order (details in SETUP.md)
-1. Run supabase/migrations/001_deallens_shared.sql in the DispatchLens Supabase project FIRST.
-2. Google robot account for the sheet, new Scrapingdog key.
-3. Push the code (below), create the Vercel project, add the env vars.
-4. Add the DealLens callback address to Supabase > Authentication > Redirect URLs.
+WHAT CHANGED
+- lib/google.ts: the key is cleaned up and rebuilt before use, so all of those paste forms now work
+  (14 forms tested). If the key is truly broken, the sync error now says so in plain words.
+- Optional: you can paste the whole downloaded JSON key file into ONE variable, GOOGLE_SERVICE_ACCOUNT_JSON,
+  instead of GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY. You don't need to change anything if you
+  keep the two you already added.
+- tests/key.test.mts (new), tests/google.test.mts, package.json (test script, version), .env.example.
 
-PUSH THE CODE (from your local DealLens repo folder)
-   git pull
-   (unzip and copy everything inside deallens-v4/ into the repo folder, replacing files)
-   git rm -r --cached --ignore-unmatch app/team app/api/team components/TeamPage.tsx supabase/migrations/001_deallens.sql
-   rm -rf app/team app/api/team components/TeamPage.tsx supabase/migrations/001_deallens.sql
-   git add -A
-   git commit -m "DealLens v4: share DispatchLens database, people and device approval"
-   git push
-(The two "team" lines only matter if you already pushed v3. If you didn't, they do nothing.)
+PUSH (no comment lines, safe to paste into Terminal)
+cd ~/DealLens
+git pull
+rm -rf /tmp/deallens-401 && unzip -q ~/Downloads/DealLens_v4.0.1.zip -d /tmp/deallens-401
+rsync -a /tmp/deallens-401/deallens-v4.0.1/ ~/DealLens/
+git status --short
+git add -A
+git commit -m "DealLens 4.0.1: accept the Google key however it is pasted"
+git push
 
-WHAT WAS CHECKED BEFORE SHIPPING
-- tsc --noEmit clean, next build clean, clean install from the lockfile, npm audit (production) 0 vulnerabilities.
-- Logic tests on the real catalogue and real deal files: same counts as before.
-- The migration ran twice on Postgres 16 next to stand-ins for dispatch_user_access and approved_devices.
-  Approved person + approved device: reads and writes. Pending, denied, revoked or missing device: nothing.
-  Pending or unknown person: nothing, even on an approved device. Owner: everything, no device needed.
-  Only the owner can change schedules. Only the server writes the catalogue and check results.
-  DispatchLens's own rules on those two tables were left exactly as they were.
-- The built app was run against a fake Supabase loaded with the real catalogue and deal files:
-  a staff account on a new device saw the code screen, a "DealLens · …" pending request was created, its API calls
-  were refused (403), and after approval the data loaded. A pending account was sent to the login page with the
-  "approve in DispatchLens" message. The owner got straight in with Owner settings visible.
-- NOT tested here: real Google sign-in, the real sheet, real Scrapingdog calls, realtime, and Vercel's scheduled jobs.
-  SETUP.md step 5 is the first live check.
+Vercel deploys the push automatically. When it shows Ready, press Sync now in DealLens.
+No database changes.

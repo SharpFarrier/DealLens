@@ -1,13 +1,13 @@
 {
   "name": "deallens",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "tsx tests/logic.test.ts && tsx --conditions=react-server tests/google.test.mts"
+    "test": "tsx tests/logic.test.ts && tsx --conditions=react-server tests/google.test.mts && tsx --conditions=react-server tests/key.test.mts"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.7",
