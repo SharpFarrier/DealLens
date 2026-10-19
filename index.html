@@ -93,7 +93,14 @@ tr.ex td{color:var(--ink3)}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:9px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s}
 .toast.on{opacity:1}
 input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
-@media (max-width:900px){.sources{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.bar .search{margin-left:0;width:100%}}
+.tabs{display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--line)}
+.tab{height:36px;padding:0 14px;border:0;background:transparent;cursor:pointer;color:var(--ink2);font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--ink);border-bottom-color:var(--ink)}
+.kpis.k5{grid-template-columns:repeat(5,minmax(0,1fr))}
+.p.swap{color:var(--bad);font-weight:500}
+.ref{height:30px;border:1px solid var(--line2);border-radius:7px;background:#fff;padding:0 6px;font-size:12.5px}
+@media (max-width:900px){.kpis.k5{grid-template-columns:repeat(2,minmax(0,1fr))}.sources{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.bar .search{margin-left:0;width:100%}}
 </style>
 </head>
 <body>
@@ -106,9 +113,15 @@ input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:po
     <button class="btn" id="btnSettings">Settings</button>
   </div>
 
+  <div class="tabs" id="tabs">
+    <button class="tab on" data-tab="deal">Deal prices</button>
+    <button class="tab" data-tab="avail">Live status</button>
+  </div>
+
   <div class="settings" id="settings">
     <label class="fld">Scrapingdog API key <input id="sdKey" type="password" style="width:240px" autocomplete="off"></label>
     <label class="fld">Match tolerance ₹ <input id="tol" class="n" type="number" min="0" step="1"></label>
+    <label class="fld">Your Amazon merchant ID <input id="mid" style="width:160px;font-family:var(--mono)" autocomplete="off"></label>
     <button class="btn" id="btnExportPlan">Export plan</button>
     <label class="btn">Import plan<input id="fPlan" type="file" accept=".json" hidden></label>
     <button class="btn" id="btnReset">Clear all data</button>
@@ -145,12 +158,28 @@ input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:po
 
   <div class="tablewrap" id="tw"></div>
 
-  <div class="foot">
+  <div class="foot" id="footDeal">
     <span id="liveInfo">Live prices fill in once the sale is live. Live check scrapes only the rows currently shown.</span>
     <span style="display:flex;gap:8px;align-items:center">
       <span class="prog" id="prog"><i></i></span>
       <button class="btn" id="btnLive">Live check</button>
       <button class="btn" id="btnCsv">Export issues CSV</button>
+    </span>
+  </div>
+  <div class="foot" id="footAvail" style="display:none">
+    <span id="availInfo">Opens each ASIN the way a shopper would and checks that Amazon shows that exact ASIN, with a price and a Buy button. Checks only the rows currently shown.</span>
+    <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label class="fld">Compare price to
+        <select class="ref" id="priceRef">
+          <option value="deal">Deal price</option>
+          <option value="catalogue">Catalogue New Price</option>
+          <option value="off">Don't compare</option>
+        </select>
+      </label>
+      <span class="prog" id="prog2"><i></i></span>
+      <button class="btn" id="btnAvailRetry" style="display:none">Retry failed</button>
+      <button class="btn primary" id="btnAvail">Check ASINs</button>
+      <button class="btn" id="btnAvailCsv">Export issues CSV</button>
     </span>
   </div>
 </div>
@@ -377,6 +406,84 @@ function amzLivePrice(d){
   if (!d) return null;
   return num(d.price) || num(d.selling_price) || num(d.final_price) || num(d.deal_price) || null;
 }
+
+// Clipboard TSV from Sheets/Excel. Handles quoted cells, and re-joins rows split by a stray
+// line break inside an unquoted cell (one row in the master sheet has one).
+function parsePasted(text){
+  const rows = []; let row = [], cell = '', q = false;
+  const t = String(text || '');
+  for (let i = 0; i < t.length; i++){
+    const ch = t[i];
+    if (q){
+      if (ch === '"' && t[i + 1] === '"'){ cell += '"'; i++; }
+      else if (ch === '"') q = false;
+      else cell += ch;
+    } else if (ch === '"' && cell === '') q = true;
+    else if (ch === '\t'){ row.push(cell); cell = ''; }
+    else if (ch === '\r' || ch === '\n'){
+      if (ch === '\r' && t[i + 1] === '\n') i++;
+      row.push(cell); rows.push(row); row = []; cell = '';
+    } else cell += ch;
+  }
+  if (cell !== '' || row.length){ row.push(cell); rows.push(row); }
+  const hr = rows.findIndex(r => r.some(c => /amazon\s*asin/i.test(c)));
+  const width = hr >= 0 ? rows[hr].length : 0;
+  if (!width) return rows;
+  const out = [];
+  for (let i = 0; i < rows.length; i++){
+    let r = rows[i];
+    while (i > hr && r.length < width && i + 1 < rows.length && r.length + rows[i + 1].length - 1 <= width){
+      const nx = rows[++i];
+      r = r.slice(0, -1).concat([(r[r.length - 1] + nx[0]).trim()], nx.slice(1));
+    }
+    out.push(r);
+  }
+  return out;
+}
+const OUR_MERCHANT = 'A1VWJRNH9VRGHD';
+// Every signal in a Scrapingdog /amazon/product response that says which ASIN the page is showing.
+function servedCandidates(d){
+  const out = [];
+  const add = a => { const s = String(a || '').trim().toUpperCase(); if (RX_ASIN.test(s) && !out.includes(s)) out.push(s); };
+  if (!d || typeof d !== 'object') return out;
+  const vc = Array.isArray(d.variant_combinations) ? d.variant_combinations : [];
+  vc.forEach(v => { if (v && v.is_selected) add(v.asin); });
+  const co = d.customization_options;
+  if (co && typeof co === 'object'){
+    Object.values(co).forEach(arr => { if (Array.isArray(arr)) arr.forEach(o => { if (o && o.is_selected) add(o.asin); }); });
+  }
+  const pi = d.product_information;
+  if (pi && typeof pi === 'object') add(pi.ASIN || pi.asin);
+  return out;
+}
+// Classify one ASIN. cls: live | variant | unavailable | nobuy | error
+function classifyAmz(asin, d){
+  const want = String(asin || '').trim().toUpperCase();
+  if (!d || typeof d !== 'object') return { cls: 'error', err: 'Empty response', served: null, price: null, seller: null, mid: null };
+  const cands = servedCandidates(d);
+  const other = cands.find(a => a !== want) || null;
+  const so = d.purchase_options && typeof d.purchase_options === 'object' ? d.purchase_options.single_offer : null;
+  let price = num(d.extracted_price);
+  if (price === null && so) price = num(so.extracted_price);
+  if (price !== null && price <= 0) price = null;
+  const seller = d.sold_by || d.merchant_info || null;
+  const mid = d.merchant_id ? String(d.merchant_id).trim().toUpperCase() : null;
+  const r = { served: other || (cands.length ? cands[0] : null), price, seller, mid, err: null };
+  if (other){ r.cls = 'variant'; return r; }
+  const anyOffer = price !== null || !!seller || !!mid || !!so;
+  if (!anyOffer) r.cls = 'unavailable';
+  else if (d.unqualified_buy_box === true || price === null || (!seller && !mid && !so)) r.cls = 'nobuy';
+  else r.cls = 'live';
+  return r;
+}
+// Extra flags on a live row: price vs expected, Buy Box held by another seller.
+function availFlags(rec, expected, tol, merchantId){
+  const f = [];
+  if (!rec || rec.cls !== 'live') return f;
+  if (merchantId && rec.mid && rec.mid !== String(merchantId).trim().toUpperCase()) f.push('seller');
+  if (expected !== null && expected !== undefined && rec.price !== null && Math.abs(rec.price - expected) > (tol === undefined ? 1 : tol)) f.push('price');
+  return f;
+}
 // LOGIC END
 
 /* ---------------- UI ---------------- */
@@ -394,8 +501,10 @@ const S = {
   amzAoa: store.get('amzAoa', null),
   fkAoa: store.get('fkAoa', null),
   live: store.get('live', { amz: {}, fk: {}, at: null }),
-  cfg: store.get('cfg', { sdKey: '', tol: 1 }),
-  view: { family: 'All', filter: 'all', q: '' },
+  cfg: Object.assign({ sdKey: '', tol: 1, merchantId: OUR_MERCHANT, priceRef: 'deal' }, store.get('cfg', {})),
+  avail: store.get('avail', { at: null, r: {} }),
+  tab: store.get('tab', 'deal'),
+  view: { family: 'All', filter: 'all', afilter: 'all', q: '' },
 };
 const $ = id => document.getElementById(id);
 const inr = v => v === null || v === undefined ? '—' : '₹' + (Math.round(v * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -466,7 +575,14 @@ function render(){
   $('disc').value = S.plan.disc;
   $('sdKey').value = S.cfg.sdKey || '';
   $('tol').value = S.cfg.tol;
+  $('mid').value = S.cfg.merchantId || '';
+  $('priceRef').value = S.cfg.priceRef;
   renderSources();
+  document.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
+  $('footDeal').style.display = S.tab === 'deal' ? 'flex' : 'none';
+  $('footAvail').style.display = S.tab === 'avail' ? 'flex' : 'none';
+  if (S.tab === 'avail'){ renderAvail(); return; }
+  $('kpis').className = 'kpis';
   const results = currentResults();
   const s = summarize(results);
   const counts = { all: s.total, matched: s.matched, off: s.off, missing: s.missing, parity: s.parity, live: s.live };
@@ -585,6 +701,166 @@ async function liveCheck(){
   render();
 }
 
+/* ---------- live status (availability) ---------- */
+const AF = [
+  ['live', 'Live & buyable', 'ok'],
+  ['variant', 'Other variant shown', 'bad'],
+  ['unavailable', 'Unavailable', 'bad'],
+  ['nobuy', 'No price / no Buy', 'warn'],
+  ['error', "Couldn't check", ''],
+];
+const AF_CHIPS = [
+  ['price', 'Price ≠ expected'],
+  ['seller', 'Other seller has Buy Box'],
+  ['unchecked', 'Not checked yet'],
+  ['issues', 'Any issue'],
+];
+function expectedFor(it){
+  if (S.cfg.priceRef === 'off') return null;
+  if (S.cfg.priceRef === 'catalogue') return it.newPrice;
+  if (S.amz && it.asin){
+    const rec = S.amz.rows.find(r => r.id === it.asin);
+    if (rec && rec.deal !== null) return rec.deal;
+  }
+  return plannedFor(it, S.plan);
+}
+function availRows(){
+  const byAsin = {};
+  S.items.forEach(it => { if (it.asin && !byAsin[it.asin]) byAsin[it.asin] = it; });
+  return Object.values(byAsin).map(it => {
+    const rec = S.avail.r[it.asin] || null;
+    const expected = expectedFor(it);
+    const flags = availFlags(rec, expected, S.cfg.tol, S.cfg.merchantId);
+    return { item: it, rec, expected, flags };
+  });
+}
+function availMatch(r, f){
+  if (f === 'all') return true;
+  if (f === 'unchecked') return !r.rec;
+  if (f === 'price' || f === 'seller') return r.flags.includes(f);
+  if (f === 'issues') return !!r.rec && (r.rec.cls !== 'live' || r.flags.length > 0);
+  return !!r.rec && r.rec.cls === f;
+}
+function availVisible(){
+  const q = S.view.q.trim().toLowerCase();
+  return availRows().filter(r => {
+    if (S.view.family !== 'All' && r.item.family !== S.view.family) return false;
+    if (!availMatch(r, S.view.afilter)) return false;
+    if (q){
+      const it = r.item, rec = r.rec;
+      const hay = [it.desc, it.family, it.amzSku, it.asin, it.master, rec && rec.served].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+function productForAsin(a){ const it = S.items.find(i => i.asin === a); return it ? it.desc : null; }
+function renderAvail(){
+  const all = availRows();
+  const cnt = {}; AF.forEach(([k]) => cnt[k] = 0);
+  all.forEach(r => { if (r.rec) cnt[r.rec.cls] = (cnt[r.rec.cls] || 0) + 1; });
+  $('kpis').className = 'kpis k5';
+  $('kpis').innerHTML = AF.map(([k, l, cls]) =>
+    '<button class="kpi ' + cls + (S.view.afilter === k ? ' on' : '') + '" data-af="' + k + '"><div class="l">' + l + '</div><div class="v">' + cnt[k] + '</div></button>').join('');
+  const fams = ['All'].concat([...new Set(S.items.filter(i => i.asin).map(i => i.family))]);
+  $('bar').innerHTML = fams.map(f => '<button class="chip' + (S.view.family === f ? ' on' : '') + '" data-fam="' + esc(f) + '">' + esc(f) + '</button>').join('') +
+    '<span style="width:10px"></span>' +
+    AF_CHIPS.map(([k, l]) => '<button class="chip' + (S.view.afilter === k ? ' on' : '') + '" data-af="' + k + '">' + l + '</button>').join('') +
+    '<input class="search" id="q" placeholder="Search name, SKU, ASIN" value="' + esc(S.view.q) + '">';
+  $('famset').style.display = 'none';
+  const failed = all.filter(r => r.rec && r.rec.cls === 'error').length;
+  $('btnAvailRetry').style.display = failed ? '' : 'none';
+  $('btnAvailRetry').textContent = 'Retry failed (' + failed + ')';
+  $('availInfo').textContent = S.avail.at
+    ? 'Last checked ' + new Date(S.avail.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '. Checks only the rows currently shown.'
+    : 'Opens each ASIN the way a shopper would and checks that Amazon shows that exact ASIN, with a price and a Buy button. Checks only the rows currently shown.';
+  renderAvailTable();
+}
+function availStatus(r){
+  const rec = r.rec;
+  if (!rec) return '<span class="b mut">Not checked</span>';
+  const b = (t, l) => '<span class="b ' + t + '">' + esc(l) + '</span>';
+  let s;
+  if (rec.cls === 'live') s = b('ok', 'Live & buyable');
+  else if (rec.cls === 'variant'){
+    const p = productForAsin(rec.served);
+    s = b('bad', 'Other variant shown' + (p ? ': ' + p : ''));
+  }
+  else if (rec.cls === 'unavailable') s = b('bad', 'Unavailable, no offer');
+  else if (rec.cls === 'nobuy') s = b('warn', rec.price === null ? 'Page live, no price' : 'Page live, no Buy Box');
+  else s = '<span class="b mut" title="' + esc(rec.err || '') + '">Couldn\'t check' + (rec.err ? ': ' + esc(rec.err) : '') + '</span>';
+  if (r.flags.includes('price')) s += b('warn', 'Price ≠ ' + (S.cfg.priceRef === 'catalogue' ? 'catalogue' : 'deal') + ' ' + inr(r.expected));
+  if (r.flags.includes('seller')) s += b('warn', 'Buy Box: ' + (rec.seller || rec.mid));
+  return s;
+}
+function renderAvailTable(){
+  if (!S.items.length){
+    $('tw').innerHTML = '<div class="empty"><h2>Load your catalogue to start</h2>Live status checks every Amazon ASIN in the catalogue.</div>';
+    $('btnAvail').textContent = 'Check ASINs';
+    return;
+  }
+  const rows = availVisible();
+  $('btnAvail').textContent = 'Check ' + rows.length + ' ASIN' + (rows.length === 1 ? '' : 's');
+  $('btnAvail').disabled = !rows.length || !!S.availBusy;
+  if (!rows.length){ $('tw').innerHTML = '<div class="empty">No ASINs match this view.</div>'; return; }
+  const body = rows.map(r => {
+    const it = r.item, rec = r.rec;
+    const swapped = rec && rec.cls === 'variant';
+    const shown = rec ? (rec.served || '—') : '—';
+    const priceTxt = rec && rec.price !== null ? inr(rec.price) : '—';
+    return '<tr>' +
+      '<td class="l"><span class="desc">' + esc(it.desc) + '</span><span class="sub">' + esc(it.amzSku) + '</span></td>' +
+      '<td class="l"><span class="p">' + esc(it.asin) + '</span></td>' +
+      '<td class="l"><span class="p' + (swapped ? ' swap' : (rec ? '' : ' d')) + '">' + esc(shown) + '</span></td>' +
+      '<td><span class="p' + (swapped || !rec || rec.price === null ? ' d' : (r.flags.includes('price') ? ' x' : '')) + '">' + priceTxt + '</span>' +
+        (r.expected !== null && r.expected !== undefined ? '<span class="sub">exp ' + inr(r.expected) + '</span>' : '') + '</td>' +
+      '<td class="l">' + availStatus(r) + '</td></tr>';
+  }).join('');
+  $('tw').innerHTML = '<table><thead><tr><th class="l">Product</th><th class="l">Asked for</th><th class="l">Amazon showed</th><th>Price shown</th><th class="l">Status</th></tr></thead><tbody>' + body + '</tbody></table>';
+}
+async function availCheck(onlyFailed){
+  const key = S.cfg.sdKey;
+  if (!key){ $('settings').classList.add('open'); toast('Add your Scrapingdog API key first'); return; }
+  let rows = onlyFailed ? availRows().filter(r => r.rec && r.rec.cls === 'error') : availVisible();
+  if (!rows.length){ toast('Nothing to check in this view'); return; }
+  if (rows.length > 60 && !confirm('This will make ' + rows.length + ' Scrapingdog requests. Continue?')) return;
+  S.availBusy = true;
+  const btn = $('btnAvail'), prog = $('prog2'), bar = prog.querySelector('i');
+  btn.disabled = true; prog.style.display = 'block';
+  let done = 0;
+  const tasks = rows.map(r => async () => {
+    const a = r.item.asin;
+    let rec;
+    try {
+      const res = await fetch('https://api.scrapingdog.com/amazon/product?api_key=' + encodeURIComponent(key) + '&asin=' + a + '&domain=in');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      rec = classifyAmz(a, await res.json());
+    } catch (e) { rec = { cls: 'error', err: e.message || 'Request failed', served: null, price: null, seller: null, mid: null }; }
+    rec.at = Date.now();
+    S.avail.r[a] = rec;
+    if (rec.cls !== 'error') S.live.amz[a] = { price: rec.cls === 'variant' ? null : rec.price, at: rec.at };
+  });
+  await pool(tasks, 3, () => { done++; bar.style.width = (done / tasks.length * 100) + '%'; btn.textContent = 'Checking ' + done + '/' + tasks.length; });
+  S.avail.at = Date.now();
+  store.set('avail', S.avail); store.set('live', S.live);
+  S.availBusy = false; btn.disabled = false; prog.style.display = 'none'; bar.style.width = '0';
+  render();
+}
+function exportAvailCsv(){
+  const rows = availRows().filter(r => r.rec && (r.rec.cls !== 'live' || r.flags.length));
+  if (!rows.length){ toast('No issues to export'); return; }
+  const lab = { live: 'Live & buyable', variant: 'Other variant shown', unavailable: 'Unavailable', nobuy: 'No price / no Buy', error: "Couldn't check" };
+  const head = ['Family', 'Product', 'SKU', 'ASIN asked', 'ASIN Amazon showed', 'Product shown', 'Price shown', 'Expected price', 'Buy Box seller', 'Status', 'Flags', 'Checked at'];
+  const lines = [head.join(',')].concat(rows.map(r => {
+    const rec = r.rec;
+    return [r.item.family, r.item.desc, r.item.amzSku, r.item.asin, rec.served || '', rec.served ? (productForAsin(rec.served) || '') : '',
+      rec.price === null ? '' : rec.price, r.expected === null || r.expected === undefined ? '' : r.expected, rec.seller || rec.mid || '',
+      lab[rec.cls] + (rec.err ? ': ' + rec.err : ''), r.flags.map(f => f === 'price' ? 'Price differs' : 'Other seller has Buy Box').join('; '),
+      new Date(rec.at).toLocaleString('en-IN')].map(csvCell).join(',');
+  }));
+  download('DealLens-live-status-' + new Date().toISOString().slice(0, 10) + '.csv', '﻿' + lines.join('\n'), 'text/csv');
+}
+
 /* ---------- export ---------- */
 function csvCell(v){ const s = String(v === null || v === undefined ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
 function download(name, text, type){
@@ -604,6 +880,10 @@ function exportCsv(){
 
 /* ---------- events ---------- */
 document.addEventListener('click', e => {
+  const tb = e.target.closest('[data-tab]');
+  if (tb){ S.tab = tb.dataset.tab; store.set('tab', S.tab); render(); return; }
+  const ak = e.target.closest('[data-af]');
+  if (ak){ S.view.afilter = S.view.afilter === ak.dataset.af ? 'all' : ak.dataset.af; render(); return; }
   const k = e.target.closest('[data-f]');
   if (k){ S.view.filter = S.view.filter === k.dataset.f && k.dataset.f !== 'all' ? 'all' : k.dataset.f; render(); return; }
   const fm = e.target.closest('[data-fam]');
@@ -613,7 +893,7 @@ document.addEventListener('input', e => {
   if (e.target.id === 'q'){
     S.view.q = e.target.value;
     const pos = e.target.selectionStart;
-    renderTable(currentResults());
+    if (S.tab === 'avail') renderAvailTable(); else renderTable(currentResults());
     const q = $('q'); q.focus(); q.setSelectionRange(pos, pos);
   }
 });
@@ -647,9 +927,7 @@ $('tol').addEventListener('change', e => { const v = num(e.target.value); S.cfg.
 $('btnPaste').addEventListener('click', () => { const p = $('pasteCat'); p.style.display = p.style.display === 'block' ? 'none' : 'block'; if (p.style.display === 'block') p.focus(); });
 $('pasteCat').addEventListener('paste', e => {
   setTimeout(() => {
-    const text = $('pasteCat').value;
-    const aoa = text.split(/\r?\n/).map(l => l.split('\t'));
-    loadCatalogue(aoa);
+    loadCatalogue(parsePasted($('pasteCat').value));
     $('pasteCat').value = ''; $('pasteCat').style.display = 'none';
   }, 0);
 });
@@ -673,6 +951,11 @@ document.querySelectorAll('.src').forEach(el => {
   });
 });
 $('btnLive').addEventListener('click', liveCheck);
+$('btnAvail').addEventListener('click', () => availCheck(false));
+$('btnAvailRetry').addEventListener('click', () => availCheck(true));
+$('btnAvailCsv').addEventListener('click', exportAvailCsv);
+$('priceRef').addEventListener('change', e => { S.cfg.priceRef = e.target.value; store.set('cfg', S.cfg); render(); });
+$('mid').addEventListener('change', e => { S.cfg.merchantId = e.target.value.trim().toUpperCase(); store.set('cfg', S.cfg); render(); });
 $('btnCsv').addEventListener('click', exportCsv);
 $('btnExportPlan').addEventListener('click', () => download('DealLens-plan.json', JSON.stringify({ plan: S.plan, items: S.items }, null, 2), 'application/json'));
 $('fPlan').addEventListener('change', async e => {
@@ -686,8 +969,8 @@ $('fPlan').addEventListener('change', async e => {
   e.target.value = '';
 });
 $('btnReset').addEventListener('click', () => {
-  if (!confirm('Clear the catalogue, plan, deal files and live results from this browser?')) return;
-  ['items', 'plan', 'amz', 'fk', 'amzAoa', 'fkAoa', 'live'].forEach(k => store.del(k));
+  if (!confirm('Clear the catalogue, plan, deal files, live prices and live status from this browser?')) return;
+  ['items', 'plan', 'amz', 'fk', 'amzAoa', 'fkAoa', 'live', 'avail'].forEach(k => store.del(k));
   location.reload();
 });
 if (S.live.at) $('liveInfo').textContent = 'Live prices last checked ' + new Date(S.live.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '.';
