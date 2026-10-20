@@ -126,3 +126,13 @@ input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:po
 .seg button{height:32px;padding:0 14px;border:0;background:transparent;cursor:pointer;color:var(--ink2);font-size:13px}
 .seg button+button{border-left:1px solid var(--line)}
 .seg button.on{background:var(--ink);color:#fff}
+/* change memory */
+.chbanner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--accent-bg);border:1px solid #cdd7f6;border-radius:12px;padding:10px 14px;margin-bottom:12px}
+.chbanner .t{flex:1;min-width:240px;color:var(--accent);font-size:13px;display:flex;flex-direction:column;gap:2px}
+.chbanner .t b{font-size:14px;font-weight:600}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+tr.chg td{background:#fff8e8}
+tr.chg:hover td{background:#fff3d6}
+.old{text-decoration:line-through;color:var(--ink3);font-family:var(--mono);font-size:12px}
+.arrow{color:var(--ink3);margin:0 2px}
+.b.new{background:var(--accent-bg);color:var(--accent);margin-left:6px}

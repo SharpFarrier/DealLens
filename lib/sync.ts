@@ -1,7 +1,7 @@
 import 'server-only';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { readCatalogueSheet } from '@/lib/google';
-import { parseCatalogue, diffCatalogue } from '@/lib/logic';
+import { parseCatalogue, diffCatalogue, catalogueChanges } from '@/lib/logic';
 import { itemToProduct, productToItem, type ProductRow } from '@/lib/data';
 
 export interface SyncResult { status: 'ok' | 'error' | 'skipped'; rows?: number; added?: number; removed?: number; changed?: number; error?: string }
@@ -35,7 +35,20 @@ export async function runSync(trigger: 'manual' | 'cron' | 'auto', by: string | 
     }
 
     const now = new Date().toISOString();
-    const rows = items.map((it, i) => ({ ...itemToProduct(it, i), synced_at: now }));
+    // Change memory: rows that are new or changed in this sync keep their old values and a timestamp;
+    // everything else is cleared, so the highlight always means "changed in the latest sync".
+    // The very first sync has nothing to compare with, so nothing is marked as new.
+    const changes = prev.length ? catalogueChanges(prev, items) : [];
+    const byKey = new Map(changes.map(c => [c.key, c]));
+    const rows = items.map((it, i) => {
+      const c = byKey.get(it.key);
+      return {
+        ...itemToProduct(it, i), synced_at: now,
+        prev: c && c.kind === 'changed' ? c.prev : null,
+        changed_at: c && c.kind !== 'removed' ? now : null,
+        change_kind: c && c.kind !== 'removed' ? c.kind : null,
+      };
+    });
     for (let i = 0; i < rows.length; i += 500) {
       const { error } = await db.from('deallens_products').upsert(rows.slice(i, i + 500), { onConflict: 'key' });
       if (error) throw new Error(error.message);
@@ -44,6 +57,16 @@ export async function runSync(trigger: 'manual' | 'cron' | 'auto', by: string | 
     const gone = prev.map(p => p.key).filter(k => !keep.has(k));
     for (let i = 0; i < gone.length; i += 200) {
       const { error } = await db.from('deallens_products').delete().in('key', gone.slice(i, i + 200));
+      if (error) throw new Error(error.message);
+    }
+
+    const who = trigger === 'manual' || trigger === 'auto' ? by || 'sheet sync' : 'sheet sync';
+    const log = changes.flatMap(c => c.kind === 'changed'
+      ? c.changes.map(x => ({ at: now, source: 'sheet', item_key: c.key, ref: c.key, label: c.label, field: x.field, old_value: x.old, new_value: x.new, changed_by: who }))
+      : [{ at: now, source: 'sheet', item_key: c.key, ref: c.key, label: c.label, field: c.kind === 'added' ? 'added' : 'removed',
+           old_value: c.kind === 'added' ? null : 'in sheet', new_value: c.kind === 'added' ? 'in sheet' : null, changed_by: who }]);
+    for (let i = 0; i < log.length; i += 500) {
+      const { error } = await db.from('deallens_change_log').insert(log.slice(i, i + 500));
       if (error) throw new Error(error.message);
     }
 

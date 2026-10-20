@@ -1,15 +1,21 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabaseBrowser } from '@/lib/supabase/browser';
-import { parseDealFile, type DealFile, type Item, type LiveMap, type Plan, type AvailRecord } from '@/lib/logic';
+import { parseDealFile, type DealFile, type Item, type LiveMap, type Plan, type AvailRecord, type AvailClass } from '@/lib/logic';
 import {
-  productToItem, toNum, type AvailRow, type FkAvailRow, type DealFileRow, type LivePriceRow, type PlanSettingsRow, type ProductRow, type SyncRunRow,
+  productToItem, toNum, type AvailRow, type FkAvailRow, type ChangeLogRow, type PrevCols, type DealFileRow, type LivePriceRow, type PlanSettingsRow, type ProductRow, type SyncRunRow,
 } from '@/lib/data';
 
 export interface Settings { event: string; disc: number; tol: number; priceRef: 'deal' | 'catalogue' | 'off'; merchantId: string; updatedBy: string | null; updatedAt: string | null }
-export interface DealFileState { row: DealFileRow; parsed: DealFile | null; error: string | null }
+export interface DealFileState { row: DealFileRow; parsed: DealFile | null; error: string | null; prevParsed: DealFile | null }
 // For Flipkart rows, `asin` holds the FSN and `avail` the stock state Flipkart reported.
-export interface AvailState extends AvailRecord { asin: string; checkedAt: string; checkedBy: string | null; avail?: string | null }
+export interface AvailState extends AvailRecord {
+  asin: string; checkedAt: string; checkedBy: string | null; avail?: string | null;
+  // The previous real check, and whether this check differs from it.
+  prevCls: AvailClass | null; prevPrice: number | null; prevServed: string | null; prevCheckedAt: string | null; changed: boolean;
+}
+// What the latest sheet sync changed about a product.
+export interface ProductChange { kind: 'added' | 'changed'; at: string; prev: Partial<Item> }
 export interface Config { auto_sync: boolean; auto_live_status: boolean }
 
 export interface DealData {
@@ -22,6 +28,8 @@ export interface DealData {
   live: LiveMap;
   avail: Record<string, AvailState>;
   fkAvail: Record<string, AvailState>;
+  productChanges: Record<string, ProductChange>;
+  changeLog: ChangeLogRow[];
   lastSync: SyncRunRow | null;
   lastOkSync: SyncRunRow | null;
   config: Config;
@@ -32,20 +40,27 @@ const EMPTY: DealData = {
   settings: { event: '', disc: 16, tol: 1, priceRef: 'deal', merchantId: '', updatedBy: null, updatedAt: null },
   plan: { disc: 16, familyDisc: {}, override: {}, excluded: {} },
   files: { amz: null, fk: null },
-  live: { amz: {}, fk: {} }, avail: {}, fkAvail: {}, lastSync: null, lastOkSync: null,
+  live: { amz: {}, fk: {} }, avail: {}, fkAvail: {}, productChanges: {}, changeLog: [], lastSync: null, lastOkSync: null,
   config: { auto_sync: true, auto_live_status: false },
 };
 
-type Table = 'products' | 'plan_settings' | 'family_discounts' | 'sku_overrides' | 'sku_excluded' | 'deal_files' | 'live_prices' | 'avail_checks' | 'fk_avail_checks' | 'sync_runs' | 'app_config';
-const TABLES: Table[] = ['products', 'plan_settings', 'family_discounts', 'sku_overrides', 'sku_excluded', 'deal_files', 'live_prices', 'avail_checks', 'fk_avail_checks', 'sync_runs', 'app_config'];
+type Table = 'products' | 'plan_settings' | 'family_discounts' | 'sku_overrides' | 'sku_excluded' | 'deal_files' | 'live_prices' | 'avail_checks' | 'fk_avail_checks' | 'sync_runs' | 'app_config' | 'change_log';
+const TABLES: Table[] = ['products', 'plan_settings', 'family_discounts', 'sku_overrides', 'sku_excluded', 'deal_files', 'live_prices', 'avail_checks', 'fk_avail_checks', 'sync_runs', 'app_config', 'change_log'];
 
 function fileState(row: DealFileRow): DealFileState {
+  let prevParsed: DealFile | null = null;
+  try { if (row.prev_aoa) prevParsed = parseDealFile(row.prev_aoa, row.platform, row.prev_mapping || null); } catch { /* old file unreadable: no comparison */ }
   try {
-    return { row, parsed: parseDealFile(row.aoa, row.platform, row.mapping), error: null };
+    return { row, parsed: parseDealFile(row.aoa, row.platform, row.mapping), error: null, prevParsed };
   } catch (e) {
-    return { row, parsed: null, error: e instanceof Error ? e.message : String(e) };
+    return { row, parsed: null, error: e instanceof Error ? e.message : String(e), prevParsed };
   }
 }
+
+const prevOf = (r: PrevCols) => ({
+  prevCls: (r.prev_cls as AvailClass) || null, prevPrice: toNum(r.prev_price), prevServed: r.prev_served || null,
+  prevCheckedAt: r.prev_checked_at || null, changed: !!r.changed,
+});
 
 // Loads everything for the signed-in team and keeps it live: any change anyone makes
 // (or a sync/check on the server) reloads just the table that changed.
@@ -69,6 +84,11 @@ export function useDealData() {
             if (!rows || rows.length < 1000) break;
           }
           patch.items = all.map(productToItem);
+          const pc: Record<string, ProductChange> = {};
+          all.forEach(r => {
+            if (r.changed_at && r.change_kind) pc[r.key] = { kind: r.change_kind, at: r.changed_at, prev: (r.prev || {}) as Partial<Item> };
+          });
+          patch.productChanges = pc;
           return;
         }
         case 'plan_settings': {
@@ -99,7 +119,7 @@ export function useDealData() {
           const { data: rows, error } = await sb.from('deallens_live_prices').select('*');
           if (error) { errors.push(error.message); return; }
           const live: LiveMap = { amz: {}, fk: {} };
-          (rows as LivePriceRow[]).forEach(r => { live[r.platform][r.id] = { price: toNum(r.price), err: r.err, at: r.checked_at }; });
+          (rows as LivePriceRow[]).forEach(r => { live[r.platform][r.id] = { price: toNum(r.price), err: r.err, at: r.checked_at, prevPrice: toNum(r.prev_price) }; });
           patch.live = live;
           return;
         }
@@ -108,7 +128,7 @@ export function useDealData() {
           if (error) { errors.push(error.message); return; }
           const avail: Record<string, AvailState> = {};
           (rows as AvailRow[]).forEach(r => {
-            avail[r.asin] = { asin: r.asin, cls: r.cls, served: r.served, price: toNum(r.price), seller: r.seller, mid: r.mid, err: r.err, checkedAt: r.checked_at, checkedBy: r.checked_by };
+            avail[r.asin] = { asin: r.asin, cls: r.cls, served: r.served, price: toNum(r.price), seller: r.seller, mid: r.mid, err: r.err, checkedAt: r.checked_at, checkedBy: r.checked_by, ...prevOf(r) };
           });
           patch.avail = avail;
           return;
@@ -118,7 +138,7 @@ export function useDealData() {
           if (error) { errors.push(error.message); return; }
           const fkAvail: Record<string, AvailState> = {};
           (rows as FkAvailRow[]).forEach(r => {
-            fkAvail[r.fsn] = { asin: r.fsn, cls: r.cls, served: r.served, price: toNum(r.price), seller: null, mid: null, err: r.err, avail: r.avail, checkedAt: r.checked_at, checkedBy: r.checked_by };
+            fkAvail[r.fsn] = { asin: r.fsn, cls: r.cls, served: r.served, price: toNum(r.price), seller: null, mid: null, err: r.err, avail: r.avail, checkedAt: r.checked_at, checkedBy: r.checked_by, ...prevOf(r) };
           });
           patch.fkAvail = fkAvail;
           return;
@@ -130,6 +150,12 @@ export function useDealData() {
           ]);
           patch.lastSync = (last?.[0] as SyncRunRow) || null;
           patch.lastOkSync = (ok?.[0] as SyncRunRow) || null;
+          return;
+        }
+        case 'change_log': {
+          const { data: rows, error } = await sb.from('deallens_change_log').select('*').order('at', { ascending: false }).order('id', { ascending: false }).limit(500);
+          if (error) { errors.push(error.message); return; }
+          patch.changeLog = (rows || []) as ChangeLogRow[];
           return;
         }
         case 'app_config': {

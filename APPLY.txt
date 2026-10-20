@@ -1,38 +1,43 @@
-DealLens 4.1 — Flipkart Live status (includes the 4.0.2 HTTP 429 fix; you can skip pushing 4.0.2)
+DealLens 4.2 — memory: remembers every change and highlights what changed since the previous check
 
-FIRST: run supabase/migrations/002_deallens_flipkart_status.sql in the DispatchLens Supabase project
-(SQL Editor > New query > paste > Run). It only adds two deallens_ tables for Flipkart results.
+FIRST: run supabase/migrations/003_deallens_change_memory.sql in the DispatchLens Supabase project
+(SQL Editor > New query > paste > Run). It only adds a deallens_change_log table, "previous value"
+columns on deallens_ tables, and triggers on the DealLens plan tables. Nothing else is touched.
 
-WHAT'S NEW
-- Live status has an Amazon / Flipkart / Both switch.
-  Flipkart: each FSN's own product page is checked (the link from the master sheet). It reports
-  Live & buyable, Other variant shown (Flipkart showed a different FSN), Sold out / Discontinued,
-  Coming soon / Not buyable, or Couldn't check. Price is compared with the Flipkart deal file (or
-  your plan, or the catalogue price — the same "Compare price to" setting as Amazon).
-  How it reads the page was worked out from 3 real Flipkart pages fetched today: the page states the
-  FSN it is showing, the price and InStock/OutOfStock in one structured block.
-  Both: one row per product, Amazon and Flipkart side by side. Filters pick a product if either side
-  matches, and still show both sides.
-- The Deal prices tab's Flipkart "Live check" now uses the same reading, and also fills Live status.
-- The 9:00 am daily check (if switched on) now covers Flipkart too: half the time for Amazon, half
-  for Flipkart, longest-unchecked first; anything not reached goes first the next day.
-- 4.0.2 fix included: at most 2 Scrapingdog requests at a time (SCRAPINGDOG_CONCURRENCY to change),
-  and HTTP 429 is retried with waits instead of shown as "Couldn't check".
+WHAT IT DOES
+- Banner at the top when the latest checks changed something, e.g.
+  "7 changes in the latest checks — 2 live status (2 went unavailable) · 2 prices moved · 2 sheet edits · 1 deal file row".
+  "Show only changed" filters both tabs down to those rows. "See all changes" opens the Changes tab.
+- Highlighted rows with old → new, compared with the previous check of that same listing:
+    Live status: old status crossed out → new status, old price crossed out, old variant shown.
+    Deal prices: sheet New Price old → new, "new SKU" for rows added to the sheet, old deal price from
+    the deal file it replaced, old live price.
+  A highlight clears by itself when that listing's next check finds nothing different.
+  "Couldn't check" never counts as a change, in either direction.
+- Changes tab: the full history, newest first, filter by Live status / Prices / Sheet / Deal files /
+  Plan edits, searchable, with who or what made each change (a person, "daily check", "sheet sync").
+  Plan edits (discount %, family discounts, price overrides, in/out of sale) are recorded by the
+  database itself, so nothing is missed.
+- History starts from the first check / sync / upload after this update. Earlier changes weren't recorded.
 
 WHAT WAS CHECKED
-- tsc clean, next build clean, all tests pass (logic on your real files, Google key 14 paste forms,
-  429 retry, Flipkart classifier incl. a swapped variant, sold out, pre-order, blocked page).
-- Migration 002 ran twice on Postgres next to 001: approved device reads, pending device gets
-  nothing, the browser can't write results, change pings work.
-- Built app driven in a browser against stand-in data: Flipkart view, Both view, filters, 390px width.
-- Not tested here: real Flipkart checks through the deployed server (they will use your Vercel key).
+- tsc clean, next build clean, all tests pass, including new diff tests on your real catalogue and
+  GIF deal file.
+- Migration 003 ran twice on Postgres alongside 001 and 002: plan edits are logged with the right
+  person and tidy values (16% → 18%, ₹7,900), the browser can't fake a log entry or write one under
+  someone else's email, an unapproved device sees no history.
+- A real server-side Amazon check against fake Scrapingdog answers: a listing going live → unavailable
+  was saved with its previous status and price, flagged as changed, and logged; a listing with no
+  earlier check was not flagged.
+- The built app driven in a browser: banner counts, "Show only changed", highlighted rows with old
+  values on both tabs and in Both view, Changes tab filters, 390px width.
 
 PUSH (safe to paste into Terminal)
 cd ~/DealLens
 git pull
-rm -rf /tmp/deallens-41 && unzip -q ~/Downloads/DealLens_v4.1.zip -d /tmp/deallens-41
-rsync -a /tmp/deallens-41/deallens-v4.1/ ~/DealLens/
+rm -rf /tmp/deallens-42 && unzip -q ~/Downloads/DealLens_v4.2.zip -d /tmp/deallens-42
+rsync -a /tmp/deallens-42/deallens-v4.2/ ~/DealLens/
 git status --short
 git add -A
-git commit -m "DealLens 4.1: Flipkart Live status, Scrapingdog rate-limit fix"
+git commit -m "DealLens 4.2: change memory and highlights"
 git push

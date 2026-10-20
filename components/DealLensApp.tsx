@@ -1,11 +1,12 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabaseBrowser } from '@/lib/supabase/browser';
-import { useDealData, type AvailState, type DealData } from '@/lib/useDealData';
+import { useDealData, type AvailState, type DealData, type ProductChange } from '@/lib/useDealData';
+import type { ChangeLogRow } from '@/lib/data';
 import { readSpreadsheet } from '@/lib/xlsxClient';
 import {
-  buildResults, summarize, plannedFor, parseDealFile, guessDealMapping, availFlags, expectedPrice, num,
-  type Result, type Platform, type DealMapping, type Item, type AvailFlag,
+  buildResults, summarize, plannedFor, parseDealFile, guessDealMapping, availFlags, expectedPrice, num, dealFileChanges, availLabel,
+  type Result, type Platform, type DealMapping, type Item, type AvailFlag, type DealRowChange,
 } from '@/lib/logic';
 import Header from '@/components/Header';
 import OwnerSettings from '@/components/OwnerSettings';
@@ -53,7 +54,9 @@ const BATCH = 6;
 export default function DealLensApp({ me }: { me: Member }) {
   const { data, patchLocal, reload } = useDealData();
   const sb = supabaseBrowser();
-  const [tab, setTab] = useState<'deal' | 'avail'>('deal');
+  type Tab = 'deal' | 'avail' | 'changes';
+  const [tab, setTab] = useState<Tab>('deal');
+  const [onlyChanged, setOnlyChanged] = useState(false);
   const [family, setFamily] = useState('All');
   const [filter, setFilter] = useState<DealFilter>('all');
   const [afilter, setAfilter] = useState<AvailFilter>('all');
@@ -70,9 +73,9 @@ export default function DealLensApp({ me }: { me: Member }) {
   const toastT = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    try { const t = localStorage.getItem('deallens:tab'); if (t === 'avail' || t === 'deal') setTab(t); } catch { /* storage blocked */ }
+    try { const t = localStorage.getItem('deallens:tab'); if (t === 'avail' || t === 'deal' || t === 'changes') setTab(t); } catch { /* storage blocked */ }
   }, []);
-  const switchTab = (t: 'deal' | 'avail') => { setTab(t); try { localStorage.setItem('deallens:tab', t); } catch { /* storage blocked */ } };
+  const switchTab = (t: Tab) => { setTab(t); try { localStorage.setItem('deallens:tab', t); } catch { /* storage blocked */ } };
 
   const toast = useCallback((m: string) => {
     setToastMsg(m);
@@ -81,7 +84,7 @@ export default function DealLensApp({ me }: { me: Member }) {
   }, []);
   useEffect(() => { if (data.error) toast(data.error); }, [data.error, toast]);
 
-  const { items, settings, plan, files, live, avail, fkAvail } = data;
+  const { items, settings, plan, files, live, avail, fkAvail, productChanges, changeLog } = data;
   const amz = files.amz?.parsed ?? null;
   const fk = files.fk?.parsed ?? null;
 
@@ -158,12 +161,34 @@ export default function DealLensApp({ me }: { me: Member }) {
     try {
       const aoa = await readSpreadsheet(file);
       const parsed = parseDealFile(aoa, platform);
+      const old = files[platform];
+      const now = new Date().toISOString();
       const { error } = await sb.from('deallens_deal_files').upsert({
-        platform, filename: file.name, aoa, mapping: parsed.mapping, uploaded_by: me.email, uploaded_at: new Date().toISOString(),
+        platform, filename: file.name, aoa, mapping: parsed.mapping, uploaded_by: me.email, uploaded_at: now,
+        // Keep the file it replaces, so the changes can be shown.
+        prev_aoa: old?.row.aoa ?? null, prev_mapping: old?.row.mapping ?? null, prev_filename: old?.row.filename ?? null,
+        prev_uploaded_by: old?.row.uploaded_by ?? null, prev_uploaded_at: old?.row.uploaded_at ?? null,
       });
       if (error) throw new Error(error.message);
-      toast(`${platform === 'amz' ? 'Amazon' : 'Flipkart'} file loaded · ${parsed.rows.length} rows`);
-      reload('deal_files');
+      const site = platform === 'amz' ? 'Amazon' : 'Flipkart';
+      const diff = old?.parsed ? dealFileChanges(old.parsed, parsed, settings.tol) : [];
+      const byId = new Map(items.map(i => [platform === 'amz' ? i.asin : i.fsn, i]));
+      const fmt = (v: number | null) => (v === null ? null : inr(v));
+      const logRows = [
+        { at: now, source: 'deal_file', ref: platform, label: `${site} deal file`, field: 'file',
+          old_value: old ? old.row.filename || 'previous file' : null,
+          new_value: `${file.name}${old?.parsed ? ` · ${diff.length} row${diff.length === 1 ? '' : 's'} changed` : ''}`, changed_by: me.email },
+        ...diff.slice(0, 400).map(d => {
+          const it = byId.get(d.id);
+          return { at: now, source: 'deal_file', item_key: it?.key ?? null, ref: d.id || d.sku, label: it?.desc ?? (d.sku || d.id),
+            field: d.kind === 'changed' ? `${site} deal` : d.kind === 'added' ? `${site} deal added` : `${site} deal removed`,
+            old_value: fmt(d.deal[0]), new_value: fmt(d.deal[1]), changed_by: me.email };
+        }),
+      ];
+      const { error: logErr } = await sb.from('deallens_change_log').insert(logRows);
+      if (logErr) toast(`File saved, but the change history couldn't be written: ${logErr.message}`);
+      else toast(`${site} file loaded · ${parsed.rows.length} rows${old?.parsed ? ` · ${diff.length} changed` : ''}`);
+      reload('deal_files'); reload('change_log');
     } catch (e) {
       toast(e instanceof Error ? e.message : `Could not read ${file.name}`);
     }
@@ -177,22 +202,61 @@ export default function DealLensApp({ me }: { me: Member }) {
   }
   async function clearDeal(platform: Platform) {
     if (!confirm(`Remove the ${platform === 'amz' ? 'Amazon' : 'Flipkart'} deal file for everyone?`)) return;
+    const old = files[platform];
     const { error } = await sb.from('deallens_deal_files').delete().eq('platform', platform);
-    if (error) toast(error.message); else reload('deal_files');
+    if (error) { toast(error.message); return; }
+    await sb.from('deallens_change_log').insert({ source: 'deal_file', ref: platform, label: `${platform === 'amz' ? 'Amazon' : 'Flipkart'} deal file`,
+      field: 'file', old_value: old?.row.filename || 'file', new_value: 'removed', changed_by: me.email });
+    reload('deal_files'); reload('change_log');
   }
 
   // ---------- deal results ----------
   const results = useMemo(() => buildResults(items, plan, amz, fk, live, settings.tol), [items, plan, amz, fk, live, settings.tol]);
   const summary = useMemo(() => summarize(results), [results]);
+
+  // ---------- change memory: what differs from the previous check / sync / upload ----------
+  const dealDiff = useMemo(() => ({
+    amz: new Map(dealFileChanges(files.amz?.prevParsed ?? null, amz, settings.tol).map(d => [d.id, d])),
+    fk: new Map(dealFileChanges(files.fk?.prevParsed ?? null, fk, settings.tol).map(d => [d.id, d])),
+  }), [files, amz, fk, settings.tol]);
+  const moved = (lv: { price: number | null; prevPrice?: number | null } | null | undefined) =>
+    !!lv && lv.price !== null && lv.prevPrice !== null && lv.prevPrice !== undefined && Math.abs(lv.price - lv.prevPrice) > settings.tol;
+  const dealChange = useCallback((r: Result): DealChangeView | null => {
+    const it = r.item;
+    const v: DealChangeView = {
+      sheet: productChanges[it.key] || null,
+      amz: (it.asin && dealDiff.amz.get(it.asin)) || null,
+      fk: (it.fsn && dealDiff.fk.get(it.fsn)) || null,
+      liveA: moved(r.la) ? r.la!.prevPrice! : null,
+      liveF: moved(r.lf) ? r.lf!.prevPrice! : null,
+    };
+    return v.sheet || v.amz || v.fk || v.liveA !== null || v.liveF !== null ? v : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productChanges, dealDiff, settings.tol]);
+  const statusFlip = (r: AvailState | undefined) => !!r && r.changed && !!r.prevCls && r.prevCls !== r.cls;
+  const priceFlip = (r: AvailState | undefined) => !!r && r.changed && r.prevPrice !== null && r.price !== null && Math.abs(r.price - r.prevPrice) > settings.tol;
+  const changeCounts = useMemo(() => {
+    const all = [...Object.values(avail), ...Object.values(fkAvail)];
+    const c = {
+      status: all.filter(statusFlip).length,
+      soldOut: all.filter(r => statusFlip(r) && r.cls === 'unavailable').length,
+      price: all.filter(priceFlip).length,
+      swap: all.filter(r => r.changed && r.cls === 'variant').length,
+      sheet: Object.keys(productChanges).length,
+      deal: dealDiff.amz.size + dealDiff.fk.size,
+    };
+    return { ...c, total: c.status + c.price + c.sheet + c.deal };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [avail, fkAvail, productChanges, dealDiff, settings.tol]);
   const families = useMemo(() => ['All', ...new Set(items.map(i => i.family))], [items]);
   const ql = q.trim().toLowerCase();
   const matchQ = (it: { desc: string; family: string; amzSku: string; fkSku: string; asin: string; fsn: string; master: string }, extra = '') =>
     !ql || [it.desc, it.family, it.amzSku, it.fkSku, it.asin, it.fsn, it.master, extra].join(' ').toLowerCase().includes(ql);
   const visibleDeal = useMemo(() => {
     const f = FILTERS.find(x => x[0] === filter) || FILTERS[0];
-    return results.filter(r => (family === 'All' || r.item.family === family) && f[3](r) && matchQ(r.item));
+    return results.filter(r => (family === 'All' || r.item.family === family) && f[3](r) && matchQ(r.item) && (!onlyChanged || !!dealChange(r)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results, family, filter, ql]);
+  }, [results, family, filter, ql, onlyChanged, dealChange]);
 
   // ---------- live status rows (Amazon by ASIN, Flipkart by FSN) ----------
   const amzRows: AvailRowView[] = useMemo(() => {
@@ -225,13 +289,13 @@ export default function DealLensApp({ me }: { me: Member }) {
     return !!r.rec && r.rec.cls === f;
   };
   const visibleAvail = useMemo(() => {
-    const hit = availRows.filter(r => (family === 'All' || r.item.family === family) && availMatch(r, afilter) && matchQ(r.item, r.rec?.served || ''));
+    const hit = availRows.filter(r => (family === 'All' || r.item.family === family) && availMatch(r, afilter) && matchQ(r.item, r.rec?.served || '') && (!onlyChanged || !!r.rec?.changed));
     if (lvPlat !== 'both') return hit;
     // Both: a product shows (with both of its platforms) when either platform matches the filter.
     const keys = new Set(hit.map(r => r.item.key));
     return availRows.filter(r => keys.has(r.item.key));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [availRows, family, afilter, ql, lvPlat]);
+  }, [availRows, family, afilter, ql, lvPlat, onlyChanged]);
   const productFor = (id: string | null, platform: Platform) =>
     id ? items.find(i => (platform === 'amz' ? i.asin : i.fsn) === id)?.desc || null : null;
 
@@ -342,12 +406,30 @@ export default function DealLensApp({ me }: { me: Member }) {
       )}
       {showSettings && me.role === 'admin' && <OwnerSettings me={me} data={data} onToast={toast} reload={reload} />}
 
+      {changeCounts.total > 0 && (
+        <div className="chbanner" role="status">
+          <div className="t">
+            <b>{changeCounts.total} change{changeCounts.total === 1 ? '' : 's'} in the latest checks</b>
+            <span>{[
+              changeCounts.status && `${changeCounts.status} live status${changeCounts.soldOut ? ` (${changeCounts.soldOut} went unavailable)` : ''}`,
+              changeCounts.price && `${changeCounts.price} price${changeCounts.price === 1 ? '' : 's'} moved`,
+              changeCounts.swap && `${changeCounts.swap} variant swap${changeCounts.swap === 1 ? '' : 's'}`,
+              changeCounts.sheet && `${changeCounts.sheet} sheet edit${changeCounts.sheet === 1 ? '' : 's'}`,
+              changeCounts.deal && `${changeCounts.deal} deal file row${changeCounts.deal === 1 ? '' : 's'}`,
+            ].filter(Boolean).join(' · ')}</span>
+          </div>
+          {tab !== 'changes' && <button className={'btn' + (onlyChanged ? ' primary' : '')} onClick={() => setOnlyChanged(o => !o)}>{onlyChanged ? 'Showing only changed' : 'Show only changed'}</button>}
+          {tab !== 'changes' && <button className="btn" onClick={() => switchTab('changes')}>See all changes</button>}
+        </div>
+      )}
+
       <div className="tabs">
         <button className={'tab' + (tab === 'deal' ? ' on' : '')} onClick={() => switchTab('deal')}>Deal prices</button>
         <button className={'tab' + (tab === 'avail' ? ' on' : '')} onClick={() => switchTab('avail')}>Live status</button>
+        <button className={'tab' + (tab === 'changes' ? ' on' : '')} onClick={() => switchTab('changes')}>Changes</button>
       </div>
 
-      <div className="srcs2">
+      {tab !== 'changes' && <div className="srcs2">
         {(['amz', 'fk'] as Platform[]).map(p => {
           const f = files[p];
           const name = p === 'amz' ? 'Amazon deal file' : 'Flipkart deal file';
@@ -381,9 +463,11 @@ export default function DealLensApp({ me }: { me: Member }) {
             </div>
           );
         })}
-      </div>
+      </div>}
 
-      {!items.length ? (
+      {tab === 'changes' ? (
+        <ChangesView log={changeLog} items={items} />
+      ) : !items.length ? (
         <div className="tablewrap"><div className="empty"><h2>No products yet</h2>The catalogue comes from the Google Sheet. Press Sync now at the top.</div></div>
       ) : tab === 'deal' ? (
         <>
@@ -405,7 +489,7 @@ export default function DealLensApp({ me }: { me: Member }) {
               <button className="btn" style={{ height: 28 }} onClick={() => setFamilyDisc(family, null)}>Use sale default</button>
             </div>
           )}
-          <DealTable rows={visibleDeal} plan={plan} tol={settings.tol} hasFiles={!!(amz || fk)}
+          <DealTable rows={visibleDeal} plan={plan} tol={settings.tol} hasFiles={!!(amz || fk)} changeOf={dealChange}
             onExclude={setExcluded}
             onOverride={(it, v) => {
               const auto = plannedFor(it, { ...plan, override: {} });
@@ -508,8 +592,12 @@ function liveCell(lv: Result['la']) {
   return lv.price === null ? '?' : inr(lv.price);
 }
 
-function DealTable({ rows, plan, tol, hasFiles, onExclude, onOverride }: {
-  rows: Result[]; plan: DealData['plan']; tol: number; hasFiles: boolean;
+interface DealChangeView { sheet: ProductChange | null; amz: DealRowChange | null; fk: DealRowChange | null; liveA: number | null; liveF: number | null }
+
+const Old = ({ v }: { v: React.ReactNode }) => <span className="old">{v}</span>;
+
+function DealTable({ rows, plan, tol, hasFiles, changeOf, onExclude, onOverride }: {
+  rows: Result[]; plan: DealData['plan']; tol: number; hasFiles: boolean; changeOf: (r: Result) => DealChangeView | null;
   onExclude: (key: string, ex: boolean) => void; onOverride: (it: Item, v: number | null) => void;
 }) {
   if (!rows.length) return <div className="tablewrap"><div className="empty">No SKUs match this view.</div></div>;
@@ -521,19 +609,31 @@ function DealTable({ rows, plan, tol, hasFiles, onExclude, onOverride }: {
           {rows.map(r => {
             const it = r.item, isExtra = it.newPrice === null;
             const ov = plan.override[it.key] !== undefined;
+            const ch = changeOf(r);
+            const sheetPrev = ch?.sheet?.kind === 'changed' ? ch.sheet.prev : null;
+            const dealOld = (d: DealRowChange | null) => (d && d.kind === 'changed' && d.deal[0] !== d.deal[1] ? <span className="sub"><Old v={inr(d.deal[0])} /> before</span> : null);
             return (
-              <tr key={it.key} className={r.excluded ? 'ex' : ''}>
+              <tr key={it.key} className={(r.excluded ? 'ex' : '') + (ch ? ' chg' : '')}>
                 <td className="l">{!isExtra && <input type="checkbox" checked={!r.excluded} title="Include in sale" onChange={e => onExclude(it.key, !e.target.checked)} />}</td>
-                <td className="l"><span className="desc">{it.desc}</span><span className="sub">{[it.asin, it.fsn].filter(Boolean).join(' · ') || it.amzSku || it.fkSku}</span></td>
-                <td><span className="p d">{inr(it.newPrice)}</span></td>
+                <td className="l"><span className="desc">{it.desc}</span>
+                  {ch && <span className="b new">{ch.sheet?.kind === 'added' ? 'new SKU' : 'changed'}</span>}
+                  <span className="sub">{[it.asin, it.fsn].filter(Boolean).join(' · ') || it.amzSku || it.fkSku}</span>
+                  {sheetPrev && Object.keys(sheetPrev).filter(k => k !== 'newPrice').length > 0 && (
+                    <span className="sub">Sheet: {Object.entries(sheetPrev).filter(([k]) => k !== 'newPrice').map(([k, v]) => `${k} was ${String(v || '—')}`).join(', ')}</span>
+                  )}</td>
+                <td>{sheetPrev && sheetPrev.newPrice !== undefined && <span className="sub"><Old v={inr(sheetPrev.newPrice as number)} /></span>}
+                  <span className={'p' + (sheetPrev && sheetPrev.newPrice !== undefined ? '' : ' d')}>{inr(it.newPrice)}</span></td>
                 <td>{isExtra ? '—' : (
                   <input key={it.key + ':' + r.planned} className={'pin' + (ov ? ' ov' : '')} defaultValue={r.planned ?? ''}
                     title={ov ? 'Manual price. Clear to use the discount %.' : 'From discount %'}
                     onBlur={e => { const v = num(e.target.value); if (v !== r.planned || (v === null && ov)) onOverride(it as Item, v); }} />
                 )}</td>
-                <td>{priceCell(r.a, r.planned, isExtra ? !!r.a : !!it.asin, r.excluded, tol)}</td>
-                <td>{priceCell(r.f, r.planned, isExtra ? !!r.f : !!it.fsn, r.excluded, tol)}</td>
-                <td><span className="p">{liveCell(r.la)} / {liveCell(r.lf)}</span></td>
+                <td>{priceCell(r.a, r.planned, isExtra ? !!r.a : !!it.asin, r.excluded, tol)}{dealOld(ch?.amz ?? null)}</td>
+                <td>{priceCell(r.f, r.planned, isExtra ? !!r.f : !!it.fsn, r.excluded, tol)}{dealOld(ch?.fk ?? null)}</td>
+                <td><span className="p">{liveCell(r.la)} / {liveCell(r.lf)}</span>
+                  {ch && (ch.liveA !== null || ch.liveF !== null) && (
+                    <span className="sub">was <Old v={ch.liveA !== null ? inr(ch.liveA) : '—'} /> / <Old v={ch.liveF !== null ? inr(ch.liveF) : '—'} /></span>
+                  )}</td>
                 <td>{r.flags.length
                   ? r.flags.map((f, i) => <span key={i} className={'b ' + f.t}>{f.l}</span>)
                   : r.excluded ? <span className="b mut">Not in sale</span>
@@ -571,8 +671,10 @@ function StatusCell({ r, productFor, priceRef, compact }: {
   else if (rec.cls === 'unavailable') status = <B t="bad">{statusText(rec, r.platform)}</B>;
   else if (rec.cls === 'nobuy') status = <B t="warn">{statusText(rec, r.platform)}</B>;
   else status = <span className="b mut" title={rec.err || ''}>{statusText(rec, r.platform)}</span>;
+  const flipped = !!rec && rec.changed && !!rec.prevCls && rec.prevCls !== rec.cls;
   return (
     <>
+      {flipped && <><Old v={availLabel(rec!.prevCls)} /> <span className="arrow">→</span> </>}
       {status}
       {r.flags.includes('price') && <B t="warn">Price ≠ {priceRef === 'catalogue' ? 'catalogue' : 'deal'} {inr(r.expected)}</B>}
       {r.flags.includes('seller') && <B t="warn">Buy Box: {rec?.seller || rec?.mid}</B>}
@@ -595,11 +697,13 @@ function AvailTable({ rows, platform, productFor, priceRef }: {
             const it = r.item, rec = r.rec;
             const swapped = rec?.cls === 'variant';
             return (
-              <tr key={r.platform + r.id}>
-                <td className="l"><span className="desc">{it.desc}</span><span className="sub">{platform === 'fk' ? it.fkSku : it.amzSku}</span></td>
+              <tr key={r.platform + r.id} className={rec?.changed ? 'chg' : ''}>
+                <td className="l"><span className="desc">{it.desc}</span>{rec?.changed && <span className="b new">changed</span>}<span className="sub">{platform === 'fk' ? it.fkSku : it.amzSku}</span></td>
                 <td className="l"><span className="p">{r.id}</span></td>
-                <td className="l"><span className={'p' + (swapped ? ' swap' : rec ? '' : ' d')}>{rec?.served || '—'}</span></td>
+                <td className="l"><span className={'p' + (swapped ? ' swap' : rec ? '' : ' d')}>{rec?.served || '—'}</span>
+                  {rec?.changed && rec.prevServed && rec.prevServed !== rec.served && <span className="sub">was <Old v={rec.prevServed} /></span>}</td>
                 <td>
+                  {rec?.changed && rec.prevPrice !== null && rec.price !== null && rec.prevPrice !== rec.price && <span className="sub"><Old v={inr(rec.prevPrice)} /></span>}
                   <span className={'p' + (swapped || !rec || rec.price === null ? ' d' : r.flags.includes('price') ? ' x' : '')}>{rec && rec.price !== null ? inr(rec.price) : '—'}</span>
                   {r.expected !== null && <span className="sub">exp {inr(r.expected)}</span>}
                 </td>
@@ -630,6 +734,7 @@ function BothTable({ rows, productFor, priceRef }: {
     const rec = r.rec;
     return (
       <>
+        {rec?.changed && rec.prevPrice !== null && rec.price !== null && rec.prevPrice !== rec.price && <Old v={inr(rec.prevPrice)} />}{' '}
         <span className={'p' + (!rec || rec.price === null || rec.cls === 'variant' ? ' d' : r.flags.includes('price') ? ' x' : '')} style={{ marginRight: 6 }}>
           {rec && rec.price !== null ? inr(rec.price) : '—'}
         </span>
@@ -643,8 +748,8 @@ function BothTable({ rows, productFor, priceRef }: {
         <thead><tr><th className="l">Product</th><th className="l">Amazon</th><th className="l">Flipkart</th></tr></thead>
         <tbody>
           {groups.map(g => (
-            <tr key={g.item.key}>
-              <td className="l"><span className="desc">{g.item.desc}</span><span className="sub">{[g.item.asin, g.item.fsn].filter(Boolean).join(' · ')}</span></td>
+            <tr key={g.item.key} className={g.amz?.rec?.changed || g.fk?.rec?.changed ? 'chg' : ''}>
+              <td className="l"><span className="desc">{g.item.desc}</span>{(g.amz?.rec?.changed || g.fk?.rec?.changed) && <span className="b new">changed</span>}<span className="sub">{[g.item.asin, g.item.fsn].filter(Boolean).join(' · ')}</span></td>
               <td className="l">{cell(g.amz)}</td>
               <td className="l">{cell(g.fk)}</td>
             </tr>
@@ -652,5 +757,70 @@ function BothTable({ rows, productFor, priceRef }: {
         </tbody>
       </table>
     </div>
+  );
+}
+
+// ---------- Changes tab: the full history, newest first ----------
+const SRC: Record<string, [string, string]> = {
+  amz_status: ['Live status', 'Amazon'], fk_status: ['Live status', 'Flipkart'],
+  amz_price: ['Prices', 'Amazon'], fk_price: ['Prices', 'Flipkart'],
+  sheet: ['Sheet', 'Sheet'], deal_file: ['Deal files', 'Deal file'], plan: ['Plan edits', 'Plan'],
+};
+const GROUPS = ['All', 'Live status', 'Prices', 'Sheet', 'Deal files', 'Plan edits'];
+const FIELD: Record<string, string> = {
+  status: 'Status', shown: 'Variant shown', seller: 'Buy Box seller', price: 'Price', discount: 'Discount', family_discount: 'Family discount',
+  override: 'Planned deal', in_sale: 'In sale', event: 'Sale name', tolerance: 'Tolerance', price_ref: 'Compare price to', merchant_id: 'Merchant ID',
+  file: 'File', added: 'Added to sheet', removed: 'Removed from sheet',
+};
+
+function ChangesView({ log, items }: { log: ChangeLogRow[]; items: Item[] }) {
+  const [group, setGroup] = useState('All');
+  const [q, setQ] = useState('');
+  const byKey = useMemo(() => new Map(items.map(i => [i.key, i])), [items]);
+  const ql = q.trim().toLowerCase();
+  const rows = log.filter(r => {
+    if (group !== 'All' && SRC[r.source]?.[0] !== group) return false;
+    if (!ql) return true;
+    const it = r.item_key ? byKey.get(r.item_key) : undefined;
+    return [r.label, r.ref, r.field, r.old_value, r.new_value, r.changed_by, it?.desc, it?.family].join(' ').toLowerCase().includes(ql);
+  });
+  const who = (b: string | null) => (!b ? '' : b === 'schedule' ? 'daily check' : b.includes('@') ? short(b) : b);
+  return (
+    <>
+      <div className="bar">
+        {GROUPS.map(g => <button key={g} className={'chip' + (group === g ? ' on' : '')} onClick={() => setGroup(g)}>{g}</button>)}
+        <input className="search" placeholder="Search product, SKU, ASIN, FSN, person" value={q} onChange={e => setQ(e.target.value)} />
+      </div>
+      {!rows.length ? (
+        <div className="tablewrap"><div className="empty"><h2>No changes recorded yet</h2>Changes appear here after the next check, sheet sync, deal file upload or plan edit.</div></div>
+      ) : (
+        <div className="tablewrap">
+          <table>
+            <thead><tr><th className="l">When</th><th className="l">Where</th><th className="l">What</th><th className="l">Change</th><th className="l">By</th></tr></thead>
+            <tbody>
+              {rows.map(r => {
+                const it = r.item_key ? byKey.get(r.item_key) : undefined;
+                const label = r.label && r.label !== r.ref ? r.label : it?.desc || r.label || r.ref || '';
+                const bad = /unavailable|sold out|removed|other variant/i.test(r.new_value || '');
+                return (
+                  <tr key={r.id}>
+                    <td className="l"><span className="p d">{when(r.at)}</span></td>
+                    <td className="l"><span className="b mut">{SRC[r.source]?.[1] || r.source}</span></td>
+                    <td className="l"><span className="desc">{label}</span>{r.ref && r.ref !== label && <span className="sub">{r.ref}</span>}</td>
+                    <td className="l"><span style={{ color: 'var(--ink2)' }}>{FIELD[r.field || ''] || r.field}</span>{' '}
+                      {r.field !== 'added' && r.field !== 'removed' && <>
+                        {r.old_value !== null && <><Old v={r.old_value} /> <span className="arrow">→</span> </>}
+                        <span className={bad ? 'p x' : 'p'}>{r.new_value ?? '—'}</span>
+                      </>}</td>
+                    <td className="l"><span className="who-by">{who(r.changed_by)}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="foot"><span>{log.length >= 500 ? 'Showing the latest 500 changes. Older ones are kept in the database.' : `${log.length} change${log.length === 1 ? '' : 's'} recorded.`}</span></div>
+    </>
   );
 }

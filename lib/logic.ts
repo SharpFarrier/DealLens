@@ -32,7 +32,7 @@ export interface Plan {
   excluded: Record<string, boolean>;
 }
 
-export interface LivePrice { price: number | null; err?: string | null; at?: string | number | null }
+export interface LivePrice { price: number | null; err?: string | null; at?: string | number | null; prevPrice?: number | null }
 export interface LiveMap { amz: Record<string, LivePrice>; fk: Record<string, LivePrice> }
 
 export type FlagTone = 'bad' | 'warn' | 'info';
@@ -404,4 +404,80 @@ export function classifyFk(fsn: string, html: string | null | undefined): FkAvai
   if (!offer || price === null || /preorder|presale|backorder|limitedavailability/.test(a)) return { cls: 'nobuy', ...rec };
   if (a && !/instock|onlineonly/.test(a)) return { cls: 'nobuy', ...rec };
   return { cls: 'live', ...rec };
+}
+
+// ----- Change memory: what differs between two snapshots -----
+export interface FieldChange { field: string; old: string | null; new: string | null }
+
+const AV_LABEL: Record<AvailClass, string> = {
+  live: 'Live & buyable', variant: 'Other variant shown', unavailable: 'Unavailable', nobuy: 'Not buyable', error: "Couldn't check",
+};
+export const availLabel = (c: AvailClass | string | null | undefined) => (c ? AV_LABEL[c as AvailClass] || String(c) : null);
+const rs = (v: number | null | undefined) => (v === null || v === undefined ? null : '₹' + (Math.round(v * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 }));
+
+export interface StatusSnap { cls: AvailClass; price: number | null; served: string | null; mid?: string | null }
+
+// Live status: compares a fresh result with the previous real (non-error) check.
+// "Couldn't check" is never a change, in either direction.
+export function statusChanges(prev: StatusSnap | null, next: StatusSnap, tol = 1): FieldChange[] {
+  if (!prev || next.cls === 'error' || prev.cls === 'error') return [];
+  const out: FieldChange[] = [];
+  if (prev.cls !== next.cls) out.push({ field: 'status', old: availLabel(prev.cls), new: availLabel(next.cls) });
+  else if (next.cls === 'variant' && prev.served !== next.served) out.push({ field: 'shown', old: prev.served, new: next.served });
+  if (prev.mid && next.mid && prev.mid !== next.mid) out.push({ field: 'seller', old: prev.mid, new: next.mid });
+  const both = prev.price !== null && next.price !== null && next.cls !== 'variant' && prev.cls !== 'variant';
+  if (both && Math.abs((prev.price as number) - (next.price as number)) > tol) out.push({ field: 'price', old: rs(prev.price), new: rs(next.price) });
+  return out;
+}
+
+// Sheet: the catalogue fields people care about, between two syncs.
+const ITEM_FIELDS: [keyof Item, string][] = [
+  ['newPrice', 'New Price'], ['asin', 'ASIN'], ['fsn', 'FSN'], ['amzSku', 'Amazon SKU'], ['fkSku', 'Flipkart SKU'], ['desc', 'Name'], ['family', 'Family'],
+];
+export function itemChanges(prev: Item, next: Item): FieldChange[] {
+  const out: FieldChange[] = [];
+  for (const [f, label] of ITEM_FIELDS) {
+    const a = prev[f], b = next[f];
+    if (f === 'newPrice' ? Math.abs(Number(a) - Number(b)) > 0.005 : String(a || '') !== String(b || '')) {
+      out.push({ field: label, old: f === 'newPrice' ? rs(Number(a)) : String(a || '') || null, new: f === 'newPrice' ? rs(Number(b)) : String(b || '') || null });
+    }
+  }
+  return out;
+}
+
+export interface CatalogueChange { key: string; label: string; kind: 'added' | 'removed' | 'changed'; changes: FieldChange[]; prev: Partial<Item> | null }
+export function catalogueChanges(prev: Item[], next: Item[]): CatalogueChange[] {
+  const p = new Map(prev.map(i => [i.key, i]));
+  const n = new Map(next.map(i => [i.key, i]));
+  const out: CatalogueChange[] = [];
+  for (const [k, v] of n) {
+    const o = p.get(k);
+    if (!o) { out.push({ key: k, label: v.desc, kind: 'added', changes: [], prev: null }); continue; }
+    const ch = itemChanges(o, v);
+    if (ch.length) {
+      const old: Partial<Item> = {};
+      for (const [f, label] of ITEM_FIELDS) if (ch.some(c => c.field === label)) (old as Record<string, unknown>)[f] = o[f];
+      out.push({ key: k, label: v.desc, kind: 'changed', changes: ch, prev: old });
+    }
+  }
+  for (const [k, o] of p) if (!n.has(k)) out.push({ key: k, label: o.desc, kind: 'removed', changes: [], prev: o });
+  return out;
+}
+
+// Deal files: which deal / base prices changed between the previous upload and the current one.
+export interface DealRowChange { id: string; sku: string; kind: 'added' | 'removed' | 'changed'; deal: [number | null, number | null]; base: [number | null, number | null] }
+export function dealFileChanges(prev: DealFile | null, next: DealFile | null, tol = 1): DealRowChange[] {
+  if (!prev || !next) return [];
+  const key = (r: DealRow) => r.id || 'SKU:' + r.sku.toUpperCase();
+  const p = new Map(prev.rows.map(r => [key(r), r]));
+  const n = new Map(next.rows.map(r => [key(r), r]));
+  const diff = (a: number | null, b: number | null) => (a === null) !== (b === null) || (a !== null && b !== null && Math.abs(a - b) > tol);
+  const out: DealRowChange[] = [];
+  for (const [k, r] of n) {
+    const o = p.get(k);
+    if (!o) out.push({ id: r.id, sku: r.sku, kind: 'added', deal: [null, r.deal], base: [null, r.base] });
+    else if (diff(o.deal, r.deal) || diff(o.base, r.base)) out.push({ id: r.id, sku: r.sku, kind: 'changed', deal: [o.deal, r.deal], base: [o.base, r.base] });
+  }
+  for (const [k, o] of p) if (!n.has(k)) out.push({ id: o.id, sku: o.sku, kind: 'removed', deal: [o.deal, null], base: [o.base, null] });
+  return out;
 }
