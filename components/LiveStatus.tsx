@@ -59,7 +59,7 @@ export default function LiveStatus({ data, rows, busy, onCheckAll, onRecheck }: 
           <h1>Live status</h1>
           <div className="sub">
             Last checked {whenLabel(lastChecked)}
-            {data.config.auto_live_status ? ' · checks itself daily at 9:00 am' : ''}
+            {data.config.auto_live_status ? ' · checks itself every morning from 6:45 am' : ' · daily morning check is off (Settings)'}
           </div>
         </div>
         <div className="acts">

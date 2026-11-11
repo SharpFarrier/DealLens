@@ -1,0 +1,52 @@
+# Every morning: sync the sheet, then check every listing on Amazon and Flipkart, in chunks,
+# until all are done. Then retry anything that couldn't be checked, once.
+# Needs one repository secret: CRON_SECRET (the same value as in Vercel).
+# Run it by hand any time: GitHub > Actions > Morning Live status check > Run workflow.
+name: Morning Live status check
+
+on:
+  schedule:
+    - cron: '15 1 * * *'   # 6:45 am India time (GitHub may start it a few minutes late)
+  workflow_dispatch:
+
+concurrency:
+  group: morning-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DEALLENS_URL: https://deal-lens-coral.vercel.app
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+    steps:
+      - name: Sync the sheet
+        run: |
+          curl -sS -m 120 -H "Authorization: Bearer $CRON_SECRET" "$DEALLENS_URL/api/cron/sync" || echo "Sheet sync failed; checking with the last synced sheet"
+          echo
+
+      - name: Check every listing
+        run: |
+          if [ -z "$CRON_SECRET" ]; then echo "Add the CRON_SECRET repository secret first."; exit 1; fi
+          run_pass () {
+            mode="$1"; since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; fails=0; idle=0
+            for i in $(seq 1 60); do
+              out="$(curl -sS -m 330 -H "Authorization: Bearer $CRON_SECRET" "$DEALLENS_URL/api/cron/live-status?budget=240&since=$since&retry=$mode")" || out=''
+              echo "[$mode $i] $out"
+              status="$(echo "$out" | jq -r '.status // "failed"' 2>/dev/null || echo failed)"
+              if [ "$status" = "skipped" ]; then echo "Daily Live status check is off in DealLens Settings."; exit 0; fi
+              if [ "$status" != "ok" ]; then
+                fails=$((fails+1)); [ "$fails" -ge 5 ] && { echo "Too many failed calls"; exit 1; }
+                sleep 30; continue
+              fi
+              fails=0
+              [ "$(echo "$out" | jq -r '.remaining')" = "0" ] && return 0
+              if [ "$(echo "$out" | jq -r '.checked')" = "0" ]; then
+                idle=$((idle+1)); [ "$idle" -ge 3 ] && { echo "No progress; stopping this pass"; return 0; }
+              else idle=0; fi
+            done
+          }
+          run_pass due
+          run_pass errors
+          echo "Done."

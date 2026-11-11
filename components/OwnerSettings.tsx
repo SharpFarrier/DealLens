@@ -32,7 +32,7 @@ export default function OwnerSettings({ me, data, onToast, reload, onClose }: {
           Daily at 8:00 am, and when someone opens DealLens over an hour after the last sync</label>
         <span className="k2">Daily Live status check</span>
         <label className="switch"><input type="checkbox" checked={data.config.auto_live_status} onChange={e => setConfig('auto_live_status', e.target.checked)} />
-          Every listing at 9:00 am (about {listings} Scrapingdog requests a day). Needed for the 30-day bars to fill in every day.</label>
+          Every listing, every morning from 6:45 am, finished before the team starts (about {listings} Scrapingdog requests a day). Fills in the 30-day bars.</label>
         <span className="k2">People and devices</span><span>Managed in DispatchLens &gt; Users (approve the person, then their “DealLens · …” device)</span>
       </div>
     </div>

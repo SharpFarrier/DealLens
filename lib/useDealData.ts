@@ -120,16 +120,16 @@ export function useDealData() {
             return;
           }
           case 'days': {
-            const { data: rows, error } = await sb.rpc('deallens_status_days', { p_days: 30 });
-            if (error) throw new Error(error.message);
-            patch.days = ((rows || []) as { day: string; platform: Plat; family: string; checked: number; down: number }[])
-              .map(r => ({ day: String(r.day).slice(0, 10), platform: r.platform, family: r.family, checked: Number(r.checked), down: Number(r.down) }));
+            // Paged: 30 days x families x 2 platforms can pass the API's 1,000-row page size.
+            const rows = await all<{ day: string; platform: Plat; family: string; checked: number; down: number }>((a, b) =>
+              sb.rpc('deallens_status_days', { p_days: 30 }).order('day').order('platform').order('family').range(a, b));
+            patch.days = rows.map(r => ({ day: String(r.day).slice(0, 10), platform: r.platform, family: r.family, checked: Number(r.checked), down: Number(r.down) }));
             return;
           }
           case 'down_since': {
-            const { data: rows, error } = await sb.rpc('deallens_down_since');
-            if (error) throw new Error(error.message);
-            patch.downSince = Object.fromEntries(((rows || []) as { platform: Plat; id: string; since: string }[]).map(r => [r.platform + ':' + r.id, r.since]));
+            const rows = await all<{ platform: Plat; id: string; since: string }>((a, b) =>
+              sb.rpc('deallens_down_since').order('platform').order('id').range(a, b));
+            patch.downSince = Object.fromEntries(rows.map(r => [r.platform + ':' + r.id, r.since]));
             return;
           }
           case 'sync_runs': {

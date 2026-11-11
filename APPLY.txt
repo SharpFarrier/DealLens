@@ -1,35 +1,32 @@
-DealLens 5.0: the revamp (Live status, Pricing check, Amazon vs Flipkart)
+DealLens 5.1: every listing checked automatically each morning
 
 What changes
-- Three tabs, matching the approved mockups:
-  1. Live status: listings live out of total for Amazon and Flipkart, 30-day bars, a "Down now"
-     list (longest-broken first, with how long it's been down), and every family's 30-day history.
-  2. Pricing check: pick the selling price column from your sheet, Sale (column minus %, with
-     per-family %) or Normal day (exactly the column), checked to the exact rupee.
-     New price columns in the sheet are detected automatically and offered with a before/after preview.
-  3. Amazon vs Flipkart: same price on both, price differs, live on one only.
-- One "Check all" button on every tab, plus "Recheck problems" on Live status.
-- A listing counts on a platform when the sheet has its ASIN / FSN, unless the sheet's Status says
-  that platform is "Pending" (the 4 Lizon rows on Flipkart today).
-- Removed: deal-file uploads, the Changes tab and banner. Nothing is deleted from the database.
+- A GitHub job runs every morning at 6:45 am India time: it syncs the sheet, then checks every
+  Amazon and Flipkart listing in chunks until all are done (about 20-30 minutes), then retries
+  anything that couldn't be checked, once. Nobody needs to press Check all or keep a tab open.
+- Vercel's daily 9:00 am check stays as a backup; once the morning job has finished it has nothing
+  left to do and uses no Scrapingdog credits.
+- Fixed: the 30-day bars could miss some days once there were more than 1,000 history rows.
+- No database change this time.
 
-STEP 1 - Supabase (DispatchLens project) > SQL Editor > New query:
-  paste all of 004_deallens_revamp.sql and press Run. Safe to run twice.
-
-STEP 2 - Terminal:
+STEP 1 - Terminal:
 
 cd ~/DealLens
 git pull
-rm -rf /tmp/deallens-50 && unzip -q ~/Downloads/DealLens_v5.0.zip -d /tmp/deallens-50
-rsync -a /tmp/deallens-50/deallens-v5.0/ ~/DealLens/
-git rm -q --ignore-unmatch components/Header.tsx lib/xlsxClient.ts
+rm -rf /tmp/deallens-51 && unzip -q ~/Downloads/DealLens_v5.1.zip -d /tmp/deallens-51
+rsync -a /tmp/deallens-51/deallens-v5.1/ ~/DealLens/
 git status --short
 git add -A
-git commit -m "DealLens 5.0: Live status, Pricing check, Amazon vs Flipkart"
+git commit -m "DealLens 5.1: morning check for every listing"
 git push
 
-STEP 3 - After Vercel deploys, open DealLens and press the sync icon (top right) once,
-so every price column in the sheet is loaded. Then press Check all.
+STEP 2 - GitHub secret (one time):
+  github.com/SharpFarrier/DealLens > Settings > Secrets and variables > Actions > New repository secret
+  Name: CRON_SECRET
+  Value: the same CRON_SECRET that is in Vercel (Vercel > deal-lens > Settings > Environment Variables)
 
-For the 30-day bars to fill in every day, switch on "Daily Live status check" in Settings
-(your avatar, top right > Settings).
+STEP 3 - In DealLens: avatar (top right) > Settings > switch on "Daily Live status check".
+
+STEP 4 - Try it now instead of waiting for tomorrow:
+  github.com/SharpFarrier/DealLens > Actions > Morning Live status check > Run workflow.
+  Each line in the log shows how many were checked and how many are left.
