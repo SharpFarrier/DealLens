@@ -18,6 +18,9 @@ export interface Item {
   fkLink: string;
   fsn: string;
   newPrice: number;
+  // Every price column in the sheet for this row (header -> rupees), and the sheet's Status text.
+  prices?: Record<string, number>;
+  status?: string;
 }
 
 export interface DealMapping { id: number; sku: number; base: number; deal: number }
@@ -74,6 +77,29 @@ function findHeaderRow(aoa: Aoa, test: RegExp): number {
   return -1;
 }
 
+// A price cell: "₹14,699.00", "14699", "Rs. 6,999". Dates, SKUs and links don't match.
+const RX_MONEY = /^(?:₹|rs\.?|inr)?\s*\d{1,3}(?:,\d{2,3})*(?:\.\d+)?$|^(?:₹|rs\.?|inr)?\s*\d+(?:\.\d+)?$/i;
+const RX_NOT_PRICE_HEADER = /asin|fsn|sku|link|url|date|updated|status|name|desc|id$|qty|quantity|stock|weight|size|gst|hsn/i;
+
+// The sheet's price columns: any column (other than IDs, names, dates...) whose filled cells are mostly prices.
+// New columns are picked up automatically, so a new "Price 11 Nov" column needs no setup.
+export function findPriceColumns(headers: string[], rows: Aoa): number[] {
+  const out: number[] = [];
+  headers.forEach((h, c) => {
+    if (!h || RX_NOT_PRICE_HEADER.test(h)) return;
+    let filled = 0, money = 0;
+    for (const r of rows) {
+      const v = clean((r || [])[c]);
+      if (!v) continue;
+      filled++;
+      if (RX_MONEY.test(v.replace(/\s+/g, '')) && (num(v) ?? 0) > 0) money++;
+    }
+    const named = /price|mrp|selling/i.test(h);
+    if (filled >= (named ? 1 : 3) && money / filled >= 0.8) out.push(c);
+  });
+  return out;
+}
+
 export function parseCatalogue(aoa: Aoa): Item[] {
   const hr = findHeaderRow(aoa, /amazon\s*asin/i);
   if (hr < 0) throw new Error('No "Amazon Asin" column found in the catalogue.');
@@ -88,16 +114,21 @@ export function parseCatalogue(aoa: Aoa): Item[] {
     fkLink: findCol(h, [/flipkart\s*link/i]),
     fsn: findCol(h, [/fsn/i]),
     newPrice: findCol(h, [/new\s*price/i]),
+    status: findCol(h, [/^status$/i]),
   };
-  if (c.newPrice < 0) throw new Error('No "New Price" column found in the catalogue.');
+  const body = aoa.slice(hr + 1);
+  const priceCols = findPriceColumns(h, body);
+  if (priceCols.length === 0) throw new Error('No price columns found in the catalogue.');
   const items: Item[] = [];
   const seen: Record<string, number> = {};
-  for (let r = hr + 1; r < aoa.length; r++) {
-    const row = aoa[r] || [];
+  for (const row0 of body) {
+    const row = row0 || [];
     const g = (k: keyof typeof c) => (c[k] >= 0 ? clean(row[c[k]]) : '');
     const desc = g('desc') || g('family');
-    const newPrice = num(row[c.newPrice]);
-    if (!desc || newPrice === null) continue;
+    const prices: Record<string, number> = {};
+    for (const pc of priceCols) { const v = num(row[pc]); if (v !== null && v > 0) prices[h[pc]] = v; }
+    const newPrice = c.newPrice >= 0 ? num(row[c.newPrice]) : null;
+    if (!desc || (newPrice === null && Object.keys(prices).length === 0)) continue;
     const asin = g('asin').toUpperCase();
     const fsn = g('fsn').toUpperCase();
     const base = {
@@ -109,13 +140,26 @@ export function parseCatalogue(aoa: Aoa): Item[] {
       fkSku: g('fkSku'),
       fkLink: /^https?:/i.test(g('fkLink')) ? g('fkLink') : '',
       fsn: RX_FSN.test(fsn) ? fsn : '',
-      newPrice,
+      newPrice: newPrice ?? 0,
+      prices,
+      status: g('status'),
     };
     let key = base.asin || base.fsn || base.master || desc;
     if (seen[key]) key = key + '#' + (++seen[key]); else seen[key] = 1;
     items.push({ key, ...base });
   }
   return items;
+}
+
+// The price column names in sheet order, with how many products have a value in each.
+export function priceColumnStats(aoa: Aoa): { name: string; position: number; filled: number; total: number }[] {
+  const hr = findHeaderRow(aoa, /amazon\s*asin/i);
+  if (hr < 0) return [];
+  const h = aoa[hr].map(clean);
+  const items = parseCatalogue(aoa);
+  return findPriceColumns(h, aoa.slice(hr + 1)).map((col, i) => ({
+    name: h[col], position: i, filled: items.filter(it => it.prices && h[col] in it.prices).length, total: items.length,
+  }));
 }
 
 export function guessDealMapping(headers: string[], platform: Platform): DealMapping {

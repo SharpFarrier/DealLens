@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { isCron } from '@/lib/auth';
 import { checkAmazon, checkFlipkart } from '@/lib/checks';
 import { supabaseAdmin } from '@/lib/supabase/server';
+import { countsOn } from '@/lib/views';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -16,16 +17,16 @@ export async function GET(req: Request) {
   if (!cfg || cfg.value !== true) return NextResponse.json({ status: 'skipped', reason: 'Auto Live status is off' });
 
   const [{ data: prods }, { data: amzChecks }, { data: fkChecks }] = await Promise.all([
-    db.from('deallens_products').select('asin, fsn, flipkart_link'),
+    db.from('deallens_products').select('asin, fsn, flipkart_link, sheet_status'),
     db.from('deallens_avail_checks').select('asin, checked_at'),
     db.from('deallens_fk_avail_checks').select('fsn, checked_at'),
   ]);
   const lastA = new Map((amzChecks || []).map(c => [c.asin as string, Date.parse(c.checked_at as string)]));
   const lastF = new Map((fkChecks || []).map(c => [c.fsn as string, Date.parse(c.checked_at as string)]));
-  const asins = [...new Set((prods || []).map(p => p.asin as string).filter(Boolean))]
+  const asins = [...new Set((prods || []).filter(p => countsOn(p.sheet_status as string, 'amz')).map(p => p.asin as string).filter(Boolean))]
     .sort((a, b) => (lastA.get(a) ?? 0) - (lastA.get(b) ?? 0));
   const links = new Map<string, string>();
-  (prods || []).forEach(p => { if (p.fsn && !links.has(p.fsn as string)) links.set(p.fsn as string, (p.flipkart_link as string) || ''); });
+  (prods || []).forEach(p => { if (p.fsn && countsOn(p.sheet_status as string, 'fk') && !links.has(p.fsn as string)) links.set(p.fsn as string, (p.flipkart_link as string) || ''); });
   const fsns = [...links.keys()].sort((a, b) => (lastF.get(a) ?? 0) - (lastF.get(b) ?? 0));
 
   const start = Date.now();

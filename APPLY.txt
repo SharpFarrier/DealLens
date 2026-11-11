@@ -1,43 +1,35 @@
-DealLens 4.2 — memory: remembers every change and highlights what changed since the previous check
+DealLens 5.0: the revamp (Live status, Pricing check, Amazon vs Flipkart)
 
-FIRST: run supabase/migrations/003_deallens_change_memory.sql in the DispatchLens Supabase project
-(SQL Editor > New query > paste > Run). It only adds a deallens_change_log table, "previous value"
-columns on deallens_ tables, and triggers on the DealLens plan tables. Nothing else is touched.
+What changes
+- Three tabs, matching the approved mockups:
+  1. Live status: listings live out of total for Amazon and Flipkart, 30-day bars, a "Down now"
+     list (longest-broken first, with how long it's been down), and every family's 30-day history.
+  2. Pricing check: pick the selling price column from your sheet, Sale (column minus %, with
+     per-family %) or Normal day (exactly the column), checked to the exact rupee.
+     New price columns in the sheet are detected automatically and offered with a before/after preview.
+  3. Amazon vs Flipkart: same price on both, price differs, live on one only.
+- One "Check all" button on every tab, plus "Recheck problems" on Live status.
+- A listing counts on a platform when the sheet has its ASIN / FSN, unless the sheet's Status says
+  that platform is "Pending" (the 4 Lizon rows on Flipkart today).
+- Removed: deal-file uploads, the Changes tab and banner. Nothing is deleted from the database.
 
-WHAT IT DOES
-- Banner at the top when the latest checks changed something, e.g.
-  "7 changes in the latest checks — 2 live status (2 went unavailable) · 2 prices moved · 2 sheet edits · 1 deal file row".
-  "Show only changed" filters both tabs down to those rows. "See all changes" opens the Changes tab.
-- Highlighted rows with old → new, compared with the previous check of that same listing:
-    Live status: old status crossed out → new status, old price crossed out, old variant shown.
-    Deal prices: sheet New Price old → new, "new SKU" for rows added to the sheet, old deal price from
-    the deal file it replaced, old live price.
-  A highlight clears by itself when that listing's next check finds nothing different.
-  "Couldn't check" never counts as a change, in either direction.
-- Changes tab: the full history, newest first, filter by Live status / Prices / Sheet / Deal files /
-  Plan edits, searchable, with who or what made each change (a person, "daily check", "sheet sync").
-  Plan edits (discount %, family discounts, price overrides, in/out of sale) are recorded by the
-  database itself, so nothing is missed.
-- History starts from the first check / sync / upload after this update. Earlier changes weren't recorded.
+STEP 1 - Supabase (DispatchLens project) > SQL Editor > New query:
+  paste all of 004_deallens_revamp.sql and press Run. Safe to run twice.
 
-WHAT WAS CHECKED
-- tsc clean, next build clean, all tests pass, including new diff tests on your real catalogue and
-  GIF deal file.
-- Migration 003 ran twice on Postgres alongside 001 and 002: plan edits are logged with the right
-  person and tidy values (16% → 18%, ₹7,900), the browser can't fake a log entry or write one under
-  someone else's email, an unapproved device sees no history.
-- A real server-side Amazon check against fake Scrapingdog answers: a listing going live → unavailable
-  was saved with its previous status and price, flagged as changed, and logged; a listing with no
-  earlier check was not flagged.
-- The built app driven in a browser: banner counts, "Show only changed", highlighted rows with old
-  values on both tabs and in Both view, Changes tab filters, 390px width.
+STEP 2 - Terminal:
 
-PUSH (safe to paste into Terminal)
 cd ~/DealLens
 git pull
-rm -rf /tmp/deallens-42 && unzip -q ~/Downloads/DealLens_v4.2.zip -d /tmp/deallens-42
-rsync -a /tmp/deallens-42/deallens-v4.2/ ~/DealLens/
+rm -rf /tmp/deallens-50 && unzip -q ~/Downloads/DealLens_v5.0.zip -d /tmp/deallens-50
+rsync -a /tmp/deallens-50/deallens-v5.0/ ~/DealLens/
+git rm -q --ignore-unmatch components/Header.tsx lib/xlsxClient.ts
 git status --short
 git add -A
-git commit -m "DealLens 4.2: change memory and highlights"
+git commit -m "DealLens 5.0: Live status, Pricing check, Amazon vs Flipkart"
 git push
+
+STEP 3 - After Vercel deploys, open DealLens and press the sync icon (top right) once,
+so every price column in the sheet is loaded. Then press Check all.
+
+For the 30-day bars to fill in every day, switch on "Daily Live status check" in Settings
+(your avatar, top right > Settings).

@@ -1,7 +1,7 @@
 import 'server-only';
 import { supabaseAdmin } from '@/lib/supabase/server';
 import { readCatalogueSheet } from '@/lib/google';
-import { parseCatalogue, diffCatalogue, catalogueChanges } from '@/lib/logic';
+import { parseCatalogue, diffCatalogue, catalogueChanges, priceColumnStats } from '@/lib/logic';
 import { itemToProduct, productToItem, type ProductRow } from '@/lib/data';
 
 export interface SyncResult { status: 'ok' | 'error' | 'skipped'; rows?: number; added?: number; removed?: number; changed?: number; error?: string }
@@ -69,6 +69,22 @@ export async function runSync(trigger: 'manual' | 'cron' | 'auto', by: string | 
       const { error } = await db.from('deallens_change_log').insert(log.slice(i, i + 500));
       if (error) throw new Error(error.message);
     }
+
+    // Price columns: remember every one the sheet has, and when it first appeared, so a new
+    // "selling price" column can be offered in the Pricing tab.
+    const cols = priceColumnStats(values);
+    const { data: known, error: knownErr } = await db.from('deallens_price_columns').select('name');
+    if (knownErr) throw new Error(knownErr.message);
+    const knownNames = new Set((known || []).map(r => r.name as string));
+    const colRows = cols.map(c => ({ ...c, present: true, last_seen: now, ...(knownNames.has(c.name) ? {} : { first_seen: now }) }));
+    if (colRows.length) {
+      const fresh = colRows.filter(r => !knownNames.has(r.name));
+      const old = colRows.filter(r => knownNames.has(r.name));
+      if (fresh.length) { const { error } = await db.from('deallens_price_columns').insert(fresh); if (error) throw new Error(error.message); }
+      for (const r of old) { const { error } = await db.from('deallens_price_columns').update(r).eq('name', r.name); if (error) throw new Error(error.message); }
+    }
+    const goneCols = [...knownNames].filter(n => !cols.some(c => c.name === n));
+    if (goneCols.length) await db.from('deallens_price_columns').update({ present: false }).in('name', goneCols);
 
     await db.from('deallens_sync_runs').update({
       status: 'ok', finished_at: new Date().toISOString(), row_count: items.length, ...diff,

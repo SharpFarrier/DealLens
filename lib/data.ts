@@ -5,9 +5,12 @@ export interface ProductRow {
   key: string; sort_order: number; family: string; description: string; master_sku: string | null;
   amazon_sku: string | null; asin: string | null; flipkart_sku: string | null; flipkart_link: string | null;
   fsn: string | null; new_price: number | string; synced_at?: string;
+  prices?: Record<string, number | string> | null; sheet_status?: string | null;
   prev?: Record<string, unknown> | null; changed_at?: string | null; change_kind?: 'added' | 'changed' | null;
 }
+export interface PriceColumnRow { name: string; position: number; filled: number; total: number; present: boolean; first_seen: string; last_seen: string }
 export interface PlanSettingsRow {
+  mode?: 'sale' | 'normal'; price_column?: string; price_column_by?: string | null; price_column_at?: string | null; dismissed_columns?: string[] | null;
   id: number; event: string; disc: number | string; tol: number | string;
   price_ref: 'deal' | 'catalogue' | 'off'; merchant_id: string; updated_by: string | null; updated_at: string;
 }
@@ -36,6 +39,8 @@ export function productToItem(r: ProductRow): Item {
     fkLink: r.flipkart_link || '',
     fsn: r.fsn || '',
     newPrice: Number(r.new_price),
+    prices: Object.fromEntries(Object.entries(r.prices || {}).map(([k, v]) => [k, Number(v)]).filter(([, v]) => Number.isFinite(v as number))),
+    status: r.sheet_status || '',
   };
 }
 
@@ -52,6 +57,8 @@ export function itemToProduct(it: Item, sortOrder: number): Omit<ProductRow, 'sy
     flipkart_link: it.fkLink || null,
     fsn: it.fsn || null,
     new_price: it.newPrice,
+    prices: it.prices || {},
+    sheet_status: it.status || null,
   };
 }
 
